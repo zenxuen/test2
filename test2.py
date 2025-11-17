@@ -20,23 +20,27 @@ st.title("💼 Salary Prediction Dashboard (2021–2025)")
 
 
 # ---------------------------------------------------------
-# Sidebar Upload
+# Load Internal Dataset (NO UPLOAD)
 # ---------------------------------------------------------
-st.sidebar.header("📤 Upload Dataset")
-uploaded = st.file_uploader("C:\\Users\\user\\Downloads\\Assignment.zip\\Assignment\\salaries_cyber_clean", type=["csv"], key="csv")
+data = {
+    "work_year": [2022, 2022, 2022, 2022, 2022, 2022, 2022],
+    "experience_level": ["EN", "MI", "MI", "MI", "EN", "EX", "SE"],
+    "employment_type": ["FT", "FT", "FT", "FT", "CT", "FT", "FT"],
+    "job_title": [
+        "CYBER PROGRAM MANAGER",
+        "SECURITY ANALYST",
+        "SECURITY ANALYST",
+        "IT SECURITY ANALYST",
+        "CYBER SECURITY ANALYST",
+        "APPLICATION SECURITY ARCHITECT",
+        "SECURITY RESEARCHER"
+    ],
+    "salary_in_usd": [63000, 95000, 70000, 48853, 120000, 315000, 220000],
+    "company_size": ["S", "M", "M", "L", "S", "L", "M"]
+}
 
-# Stop unless file uploaded
-if uploaded is None:
-    st.info("Please upload a CSV file from the sidebar to continue.")
-    st.stop()
+df = pd.DataFrame(data)
 
-df = pd.read_csv(uploaded)
-
-# ---------------------------------------------------------
-# Dataset preview
-# ---------------------------------------------------------
-st.subheader("📄 Dataset Preview")
-st.dataframe(df, use_container_width=True)
 
 # ---------------------------------------------------------
 # Train Model
@@ -60,7 +64,6 @@ model = Pipeline(steps=[
 
 model.fit(X, y)
 
-st.success("Model trained successfully!")
 
 # ---------------------------------------------------------
 # Forecast 2021–2025
@@ -85,47 +88,45 @@ forecast_df = pd.DataFrame({
 })
 
 # ---------------------------------------------------------
-# Graphical forecast (Plotly)
+# Plot Chart
 # ---------------------------------------------------------
-st.subheader("📈 Interactive Salary Forecast (2021–2025)")
-
+st.subheader("📈 Predicted Salary Trend (2021–2025)")
 fig = px.line(
     forecast_df,
     x="Year",
     y="Predicted Salary (USD)",
     markers=True,
-    title="Salary Prediction Trend (2021–2025)",
+    title="Salary Prediction (2021–2025)",
     template="plotly_white"
 )
-
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# Custom Prediction Section
+# Custom User Prediction
 # ---------------------------------------------------------
-st.subheader("🔮 Predict Salary for Custom Input")
+st.subheader("🔮 Predict Salary for Custom Job")
 
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    input_year = st.number_input("Work Year", min_value=2020, max_value=2030, value=2023)
+    use_year = st.number_input("Work Year", min_value=2020, max_value=2035, value=2023)
 
 with col2:
-    input_job = st.selectbox("Job Title", sorted(df["job_title"].unique()))
+    use_job = st.selectbox("Job Title", sorted(df["job_title"].unique()))
 
 with col3:
-    input_exp = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
+    use_exp = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
 
 with col4:
-    input_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
+    use_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
-user_data = pd.DataFrame({
-    "work_year": [input_year],
-    "job_title": [input_job],
-    "experience_level": [input_exp],
-    "company_size": [input_size]
+user_input = pd.DataFrame({
+    "work_year": [use_year],
+    "job_title": [use_job],
+    "experience_level": [use_exp],
+    "company_size": [use_size]
 })
 
-predicted_salary = model.predict(user_data)[0]
+pred_salary = model.predict(user_input)[0]
 
-st.metric("💰 Predicted Salary (USD)", f"${predicted_salary:,.2f}")
+st.metric("💰 Predicted Salary (USD)", f"${pred_salary:,.2f}")
