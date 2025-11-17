@@ -15,7 +15,7 @@ st.title("📈 Cybersecurity Salary Predictor (2021 - 2025)")
 # ---------------------------------------------------------
 # Load CSV
 # ---------------------------------------------------------
-file_path = r"C:\Users\user\Downloads\Assignment\Assignment\salaries_cyber_clean.csv"  # make sure it ends with .csv
+file_path = "salaries_cyber_clean.csv"  # make sure it ends with .csv
 df = pd.read_csv(file_path)
 
 st.success("Dataset loaded successfully!")
@@ -86,3 +86,4 @@ fig = px.scatter(
 )
 fig.add_scatter(x=[work_year], y=[predicted_salary], mode='markers', marker=dict(color='red', size=15), name='Your Prediction')
 st.plotly_chart(fig, use_container_width=True)
+
