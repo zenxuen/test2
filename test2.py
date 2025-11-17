@@ -20,7 +20,7 @@ st.title("📈 Cybersecurity Salary Predictor (2021 - 2025)")
 # ---------------------------------------------------------
 # Load dataset (fixed path)
 # ---------------------------------------------------------
-file_path = r"C:\\Users\\user\\Downloads\\Assignment\\Assignment\\salary_data.csv"
+file_path = r"C:\\Users\\user\\Downloads\\Assignment\\Assignment\\salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
 # ---------------------------------------------------------
@@ -113,4 +113,5 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
 
