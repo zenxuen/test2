@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
@@ -11,127 +10,106 @@ import plotly.express as px
 # Page Config
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Salary Prediction Dashboard",
-    layout="wide",
-    page_icon="💼"
+    page_title="Salary Predictor (2021 - 2025)",
+    page_icon="📈",
+    layout="wide"
 )
 
-st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
-
-
-# ---------------------------------------------------------
-# Internal Dataset
-# ---------------------------------------------------------
-data = {
-    "work_year": [2022, 2022, 2022, 2022, 2022, 2022, 2022],
-    "experience_level": ["EN", "MI", "MI", "MI", "EN", "EX", "SE"],
-    "employment_type": ["FT", "FT", "FT", "FT", "CT", "FT", "FT"],
-    "job_title": [
-        "CYBER PROGRAM MANAGER",
-        "SECURITY ANALYST",
-        "SECURITY ANALYST",
-        "IT SECURITY ANALYST",
-        "CYBER SECURITY ANALYST",
-        "APPLICATION SECURITY ARCHITECT",
-        "SECURITY RESEARCHER"
-    ],
-    "salary_in_usd": [63000, 95000, 70000, 48853, 120000, 315000, 220000],
-    "company_size": ["S", "M", "M", "L", "S", "L", "M"]
-}
-
-df = pd.DataFrame(data)
-
+st.title("📈 Cybersecurity Salary Predictor (2021 - 2025)")
 
 # ---------------------------------------------------------
-# Train Model
+# Load dataset (fixed path)
 # ---------------------------------------------------------
-X = df[["work_year", "job_title", "experience_level", "company_size"]]
-y = df["salary_in_usd"]
+file_path = r"C:\Users\user\Downloads\Assignment\Assignment\salary_data.csv"
+df = pd.read_csv(file_path)
 
-categorical_cols = ["job_title", "experience_level", "company_size"]
+# ---------------------------------------------------------
+# Train model
+# ---------------------------------------------------------
+features = ["work_year", "experience_level", "employment_type", "job_title"]
+target = "salary_in_usd"
 
-preprocessor = ColumnTransformer(
-    transformers=[
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
-    ],
+categorical_cols = ["experience_level", "employment_type", "job_title"]
+
+preprocess = ColumnTransformer(
+    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
     remainder="passthrough"
 )
 
-model = Pipeline([
-    ("prep", preprocessor),
-    ("reg", LinearRegression())
+model = Pipeline(steps=[
+    ("preprocess", preprocess),
+    ("regression", LinearRegression())
 ])
 
-model.fit(X, y)
-
+model.fit(df[features], df[target])
 
 # ---------------------------------------------------------
-# Custom Selection (affects ALL predictions)
+# User Controls – Custom Prediction Inputs
 # ---------------------------------------------------------
-st.subheader("⚙️ Customize Model Inputs")
+st.subheader("🎛️ Customize Prediction")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    custom_job = st.selectbox("Job Title", sorted(df["job_title"].unique()))
+    work_year = st.selectbox("Select Year", [2021, 2022, 2023, 2024, 2025])
 
 with col2:
-    custom_exp = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
+    experience_level = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
 
 with col3:
-    custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
+    employment_type = st.selectbox("Employment Type", sorted(df["employment_type"].unique()))
 
+job_title = st.selectbox("Job Title", sorted(df["job_title"].unique()))
 
-# ---------------------------------------------------------
-# Forecast 2021–2025 (based on custom selection)
-# ---------------------------------------------------------
-future_years = np.arange(2021, 2026)
+# Prepare input for prediction
+input_data = pd.DataFrame([{
+    "work_year": work_year,
+    "experience_level": experience_level,
+    "employment_type": employment_type,
+    "job_title": job_title
+}])
 
-custom_future_data = pd.DataFrame({
-    "work_year": future_years,
-    "job_title": custom_job,
-    "experience_level": custom_exp,
-    "company_size": custom_size
-})
+predicted_salary = model.predict(input_data)[0]
 
-future_predictions = model.predict(custom_future_data)
-
-forecast_df = pd.DataFrame({
-    "Year": future_years,
-    "Predicted Salary (USD)": future_predictions
-})
+st.success(f"💰 **Predicted Salary (USD):** ${predicted_salary:,.2f}")
 
 # ---------------------------------------------------------
-# Forecast Graph
+# Interactive Prediction Graph
 # ---------------------------------------------------------
-st.subheader("📈 Salary Forecast Based on Your Selections (2021–2025)")
+st.subheader("📊 Salary Trend Prediction (2021 - 2025)")
+
+years = [2021, 2022, 2023, 2024, 2025]
+
+graph_data = pd.DataFrame([{
+    "work_year": y,
+    "experience_level": experience_level,
+    "employment_type": employment_type,
+    "job_title": job_title
+} for y in years])
+
+graph_data["predicted_salary"] = model.predict(graph_data)
 
 fig = px.line(
-    forecast_df,
-    x="Year",
-    y="Predicted Salary (USD)",
+    graph_data,
+    x="work_year",
+    y="predicted_salary",
     markers=True,
-    title=f"Salary Forecast for {custom_job}",
-    template="plotly_white"
+    line_shape="spline",  # Smooth curve
+    title="Predicted Salary Trend",
+)
+
+fig.update_traces(marker=dict(size=10), line=dict(width=4))
+
+# Add interactive gap effect
+fig.update_xaxes(dtick=1, tickangle=0)
+fig.update_layout(
+    xaxis=dict(
+        tickmode="linear",
+        tick0=2021,
+    ),
+    plot_bgcolor="rgba(0,0,0,0)",
+    hovermode="x unified",
+    margin=dict(l=40, r=40, t=50, b=50),
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
-
-# ---------------------------------------------------------
-# Single Year Custom Prediction
-# ---------------------------------------------------------
-st.subheader("🔮 Predict Salary for a Specific Year")
-
-single_year = st.slider("Select Year", 2020, 2035, 2023)
-
-single_input = pd.DataFrame({
-    "work_year": [single_year],
-    "job_title": [custom_job],
-    "experience_level": [custom_exp],
-    "company_size": [custom_size]
-})
-
-single_prediction = model.predict(single_input)[0]
-
-st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
