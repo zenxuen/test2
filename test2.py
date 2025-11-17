@@ -9,110 +9,80 @@ import plotly.express as px
 # ---------------------------------------------------------
 # Page Config
 # ---------------------------------------------------------
-st.set_page_config(
-    page_title="Salary Predictor (2021 - 2025)",
-    page_icon="📈",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Salary Predictor", layout="wide")
 st.title("📈 Cybersecurity Salary Predictor (2021 - 2025)")
 
 # ---------------------------------------------------------
-# Load dataset (fixed path)
+# Load CSV
 # ---------------------------------------------------------
-file_path = r"C:\Users\user\Downloads\Assignment\Assignment\salaries_cyber_clean"
+file_path = r"C:\Users\user\Downloads\Assignment\Assignment\salaries_cyber_clean.csv"  # make sure it ends with .csv
 df = pd.read_csv(file_path)
 
+st.success("Dataset loaded successfully!")
+
 # ---------------------------------------------------------
-# Train model
+# Features & Target
 # ---------------------------------------------------------
-features = ["work_year", "experience_level", "employment_type", "job_title"]
-target = "salary_in_usd"
+X = df[['work_year', 'experience_level', 'employment_type', 'job_title', 'employee_residence', 'remote_ratio', 'company_location', 'company_size']]
+y = df['salary_in_usd']
 
-categorical_cols = ["experience_level", "employment_type", "job_title"]
-
-preprocess = ColumnTransformer(
-    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
-    remainder="passthrough"
-)
-
-model = Pipeline(steps=[
-    ("preprocess", preprocess),
-    ("regression", LinearRegression())
+# ---------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------
+categorical_features = ['experience_level', 'employment_type', 'job_title', 'employee_residence', 'company_location', 'company_size']
+preprocessor = ColumnTransformer(transformers=[
+    ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
 ])
 
-model.fit(df[features], df[target])
+model = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('regressor', LinearRegression())
+])
+
+model.fit(X, y)
+st.success("Model trained successfully!")
 
 # ---------------------------------------------------------
-# User Controls – Custom Prediction Inputs
+# Interactive selection
 # ---------------------------------------------------------
-st.subheader("🎛️ Customize Prediction")
+st.sidebar.header("Custom Input")
+work_year = st.sidebar.slider("Work Year", 2021, 2025, 2022)
+experience_level = st.sidebar.selectbox("Experience Level", df['experience_level'].unique())
+employment_type = st.sidebar.selectbox("Employment Type", df['employment_type'].unique())
+job_title = st.sidebar.selectbox("Job Title", df['job_title'].unique())
+employee_residence = st.sidebar.selectbox("Employee Residence", df['employee_residence'].unique())
+remote_ratio = st.sidebar.slider("Remote Ratio (%)", 0, 100, 50)
+company_location = st.sidebar.selectbox("Company Location", df['company_location'].unique())
+company_size = st.sidebar.selectbox("Company Size", df['company_size'].unique())
 
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    work_year = st.selectbox("Select Year", [2021, 2022, 2023, 2024, 2025])
-
-with col2:
-    experience_level = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
-
-with col3:
-    employment_type = st.selectbox("Employment Type", sorted(df["employment_type"].unique()))
-
-job_title = st.selectbox("Job Title", sorted(df["job_title"].unique()))
-
-# Prepare input for prediction
-input_data = pd.DataFrame([{
-    "work_year": work_year,
-    "experience_level": experience_level,
-    "employment_type": employment_type,
-    "job_title": job_title
+input_df = pd.DataFrame([{
+    'work_year': work_year,
+    'experience_level': experience_level,
+    'employment_type': employment_type,
+    'job_title': job_title,
+    'employee_residence': employee_residence,
+    'remote_ratio': remote_ratio,
+    'company_location': company_location,
+    'company_size': company_size
 }])
 
-predicted_salary = model.predict(input_data)[0]
-
-st.success(f"💰 **Predicted Salary (USD):** ${predicted_salary:,.2f}")
+predicted_salary = model.predict(input_df)[0]
+st.metric("💰 Predicted Salary (USD)", f"${predicted_salary:,.2f}")
 
 # ---------------------------------------------------------
-# Interactive Prediction Graph
+# Plot predicted vs historical
 # ---------------------------------------------------------
-st.subheader("📊 Salary Trend Prediction (2021 - 2025)")
+df_plot = df.copy()
+df_plot['Predicted Salary'] = model.predict(X)
 
-years = [2021, 2022, 2023, 2024, 2025]
-
-graph_data = pd.DataFrame([{
-    "work_year": y,
-    "experience_level": experience_level,
-    "employment_type": employment_type,
-    "job_title": job_title
-} for y in years])
-
-graph_data["predicted_salary"] = model.predict(graph_data)
-
-fig = px.line(
-    graph_data,
-    x="work_year",
-    y="predicted_salary",
-    markers=True,
-    line_shape="spline",  # Smooth curve
-    title="Predicted Salary Trend",
+fig = px.scatter(
+    df_plot,
+    x='work_year',
+    y='salary_in_usd',
+    color='job_title',
+    size='remote_ratio',
+    hover_data=['experience_level', 'company_size', 'company_location'],
+    title="Historical vs Predicted Salaries",
 )
-
-fig.update_traces(marker=dict(size=10), line=dict(width=4))
-
-# Add interactive gap effect
-fig.update_xaxes(dtick=1, tickangle=0)
-fig.update_layout(
-    xaxis=dict(
-        tickmode="linear",
-        tick0=2021,
-    ),
-    plot_bgcolor="rgba(0,0,0,0)",
-    hovermode="x unified",
-    margin=dict(l=40, r=40, t=50, b=50),
-)
-
+fig.add_scatter(x=[work_year], y=[predicted_salary], mode='markers', marker=dict(color='red', size=15), name='Your Prediction')
 st.plotly_chart(fig, use_container_width=True)
-
-
-
