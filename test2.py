@@ -17,10 +17,10 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
+st.title("💼 Salary Prediction Dashboard (Dynamic & Clear Forecast)")
 
 # ---------------------------------------------------------
-# Load Dataset
+# Load Dataset (already in Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
@@ -49,6 +49,7 @@ model.fit(X, y)
 # Custom Selection
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -59,63 +60,63 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Historical vs Forecast
+# Forecast 2020–2030
 # ---------------------------------------------------------
-historical_df = df[
+historical_years = df["work_year"].unique()
+future_years = np.arange(2021, 2031)
+
+# Historical data for selected job
+hist_data = df[
     (df["job_title"] == custom_job) &
     (df["experience_level"] == custom_exp) &
     (df["company_size"] == custom_size)
-].sort_values("work_year")
+]
 
-# Forecast for 2021–2030
-future_years = np.arange(2021, 2031)
-future_data = pd.DataFrame({
+# Forecast data
+future_df = pd.DataFrame({
     "work_year": future_years,
     "job_title": custom_job,
     "experience_level": custom_exp,
     "company_size": custom_size
 })
-future_predictions = model.predict(future_data)
-forecast_df = pd.DataFrame({
-    "Year": future_years,
-    "Predicted Salary (USD)": future_predictions
-})
+
+future_predictions = model.predict(future_df)
 
 # ---------------------------------------------------------
-# Plot Graph
+# Combine for Plotly
 # ---------------------------------------------------------
-st.subheader("📈 Salary Forecast vs Historical Data")
-
 fig = go.Figure()
 
 # Historical
-if not historical_df.empty:
-    fig.add_trace(go.Scatter(
-        x=historical_df["work_year"],
-        y=historical_df["salary_in_usd"],
-        mode="lines+markers",
-        name="Historical",
-        line=dict(color="blue", width=4),
-        marker=dict(size=10)
-    ))
+fig.add_trace(go.Scatter(
+    x=hist_data["work_year"],
+    y=hist_data["salary_in_usd"],
+    mode='lines+markers',
+    name='Historical',
+    line=dict(color='blue', width=3),
+    marker=dict(size=8)
+))
 
 # Forecast
 fig.add_trace(go.Scatter(
-    x=forecast_df["Year"],
-    y=forecast_df["Predicted Salary (USD)"],
-    mode="lines+markers",
-    name="Forecast",
-    line=dict(color="red", width=4, dash="dash"),
+    x=future_years,
+    y=future_predictions,
+    mode='lines+markers',
+    name='Forecast',
+    line=dict(color='red', width=4, dash='dash'),
     marker=dict(size=10)
 ))
 
 fig.update_layout(
-    xaxis=dict(dtick=1),
+    title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
+    xaxis_title="Year",
     yaxis_title="Salary (USD)",
+    xaxis=dict(dtick=1),
     hovermode="x unified",
     template="plotly_white"
 )
 
+st.subheader("📈 Salary Forecast (2020–2030)")
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
