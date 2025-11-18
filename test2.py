@@ -2,96 +2,110 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline
+import plotly.express as px
 
-st.title("📈 Predictive Model (Year → 2035)")
+st.set_page_config(page_title="Salary Prediction", layout="wide")
 
-# ------------------------------------
-# Load CSV already inside Codespace
-# ------------------------------------
-df = pd.read_csv("salaries_cyber_clean.csv")  # your file inside Codespace
-st.write("### Dataset Preview")
-st.dataframe(df.head())
+st.title("💼 Salary Prediction Dashboard (Improved Model)")
 
-# ------------------------------------
-# Auto-check for Year column
-# ------------------------------------
-if "Year" not in df.columns:
-    st.error("❌ Your dataset does not contain a 'Year' column — model cannot forecast to 2035.")
-    st.stop()
+# ---------------------------------------------------------
+# Load Dataset (already in your Codespace)
+# ---------------------------------------------------------
+file_path = "salaries_cyber_clean.csv"
+df = pd.read_csv(file_path)
 
-# ------------------------------------
-# User selects features
-# ------------------------------------
-st.write("### Select Features (⚠ must include 'Year')")
-feature_cols = st.multiselect("Feature columns:", df.columns.tolist(), default=["Year"])
+# ---------------------------------------------------------
+# Train Prediction Model
+# ---------------------------------------------------------
+X = df[["work_year", "job_title", "experience_level", "company_size"]]
+y = df["salary_in_usd"]
 
-if "Year" not in feature_cols:
-    st.warning("⚠ You must include 'Year' in Features for prediction to work.")
-    st.stop()
+categorical_cols = ["job_title", "experience_level", "company_size"]
 
-# ------------------------------------
-# Select target
-# ------------------------------------
-st.write("### Select Target")
-target_col = st.selectbox("Target column:", df.columns.tolist())
+preprocessor = ColumnTransformer(
+    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
+    remainder="passthrough"
+)
 
-# Proceed only if target chosen
-if feature_cols and target_col:
+# ⭐ Use Random Forest for better prediction changes
+model = Pipeline([
+    ("prep", preprocessor),
+    ("rf", RandomForestRegressor(n_estimators=300, random_state=42))
+])
 
-    X = df[feature_cols]
-    y = df[target_col]
+model.fit(X, y)
 
-    # ------------------------------------
-    # Encode categorical data
-    # ------------------------------------
-    cat_cols = X.select_dtypes(include=["object"]).columns
-    num_cols = X.select_dtypes(exclude=["object"]).columns
+# ---------------------------------------------------------
+# Custom selection
+# ---------------------------------------------------------
+st.subheader("⚙️ Customize Model Inputs")
 
-    encoder = OneHotEncoder(handle_unknown="ignore")  # valid for sklearn 1.7.2
+col1, col2, col3 = st.columns(3)
 
-    X_cat = encoder.fit_transform(X[cat_cols]).toarray() if len(cat_cols) > 0 else np.empty((len(X), 0))
-    X_num = X[num_cols].to_numpy() if len(num_cols) > 0 else np.empty((len(X), 0))
+with col1:
+    custom_job = st.selectbox("Job Title", sorted(df["job_title"].unique()))
 
-    X_final = np.concatenate([X_num, X_cat], axis=1)
+with col2:
+    custom_exp = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
 
-    # ------------------------------------
-    # Model training
-    # ------------------------------------
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_final, y, test_size=0.2, random_state=42
-    )
+with col3:
+    custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
-    model = RandomForestRegressor()
-    model.fit(X_train, y_train)
+# ---------------------------------------------------------
+# Forecast from dataset start to 2035
+# ---------------------------------------------------------
+future_years = np.arange(df["work_year"].min(), 2036)
 
-    st.success("✅ Model trained successfully!")
+custom_future_data = pd.DataFrame({
+    "work_year": future_years,
+    "job_title": custom_job,
+    "experience_level": custom_exp,
+    "company_size": custom_size
+})
 
-    # ------------------------------------
-    # Predict future years until 2035
-    # ------------------------------------
-    last_year = int(df["Year"].max())
-    future_years = list(range(last_year + 1, 2036))
+future_predictions = model.predict(custom_future_data)
 
-    future_df = pd.DataFrame({"Year": future_years})
+forecast_df = pd.DataFrame({
+    "Year": future_years,
+    "Predicted Salary (USD)": future_predictions
+})
 
-    # Create future input using same structure
-    f_cat = future_df.reindex(columns=cat_cols, fill_value="")
-    f_num = future_df.reindex(columns=num_cols, fill_value=0)
+# ---------------------------------------------------------
+# Forecast Graph
+# ---------------------------------------------------------
+st.subheader("📈 Salary Forecast Based on Your Selections (to 2035)")
 
-    f_cat_encoded = encoder.transform(f_cat).toarray() if len(cat_cols) > 0 else np.empty((len(future_df), 0))
-    f_num_values = f_num.to_numpy() if len(num_cols) > 0 else np.empty((len(future_df), 0))
+fig = px.line(
+    forecast_df,
+    x="Year",
+    y="Predicted Salary (USD)",
+    markers=True,
+    title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
+    template="plotly_white"
+)
 
-    X_future = np.concatenate([f_num_values, f_cat_encoded], axis=1)
-    future_pred = model.predict(X_future)
+fig.update_traces(line=dict(width=5), marker=dict(size=12))
+fig.update_layout(xaxis=dict(dtick=1), hovermode="x unified")
 
-    prediction_df = pd.DataFrame({
-        "Year": future_years,
-        "Prediction": future_pred
-    })
+st.plotly_chart(fig, use_container_width=True)
 
-    st.write("### 📈 Forecast to 2035")
-    st.line_chart(prediction_df.set_index("Year"))
-    st.dataframe(prediction_df)
+# ---------------------------------------------------------
+# Single prediction
+# ---------------------------------------------------------
+st.subheader("🔮 Predict Salary for a Specific Year")
 
+single_year = st.slider("Select Year", 2020, 2035, 2024)
+
+single_input = pd.DataFrame({
+    "work_year": [single_year],
+    "job_title": [custom_job],
+    "experience_level": [custom_exp],
+    "company_size": [custom_size]
+})
+
+single_prediction = model.predict(single_input)[0]
+
+st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
