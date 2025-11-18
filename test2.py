@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
 import plotly.express as px
 
@@ -16,16 +16,16 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Extrapolated Model)")
+st.title("💼 Salary Prediction Dashboard (Responsive Model)")
 
 # ---------------------------------------------------------
-# Load Dataset
+# Load Dataset (CSV already in Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
 # ---------------------------------------------------------
-# Train Linear Regression Model
+# Features & Target
 # ---------------------------------------------------------
 X = df[["work_year", "job_title", "experience_level", "company_size"]]
 y = df["salary_in_usd"]
@@ -37,15 +37,18 @@ preprocessor = ColumnTransformer(
     remainder="passthrough"
 )
 
+# ---------------------------------------------------------
+# Train Random Forest Model
+# ---------------------------------------------------------
 model = Pipeline([
     ("prep", preprocessor),
-    ("reg", LinearRegression())
+    ("reg", RandomForestRegressor(n_estimators=500, random_state=42))
 ])
 
-model.fit(X, y)  # model memorizes dataset and learns year trend
+model.fit(X, y)
 
 # ---------------------------------------------------------
-# Custom Selection Inputs
+# Custom Selection (affects ALL predictions)
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -59,18 +62,18 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast 2021–2035
+# Forecast 2021–2030 (based on custom selection)
 # ---------------------------------------------------------
-future_years = np.arange(2021, 2036)
+future_years = np.arange(2021, 2031)
 
-future_data = pd.DataFrame({
+custom_future_data = pd.DataFrame({
     "work_year": future_years,
     "job_title": custom_job,
     "experience_level": custom_exp,
     "company_size": custom_size
 })
 
-future_predictions = model.predict(future_data)
+future_predictions = model.predict(custom_future_data)
 
 forecast_df = pd.DataFrame({
     "Year": future_years,
@@ -80,7 +83,7 @@ forecast_df = pd.DataFrame({
 # ---------------------------------------------------------
 # Forecast Graph
 # ---------------------------------------------------------
-st.subheader("📈 Salary Forecast (2021–2035)")
+st.subheader("📈 Salary Forecast Based on Your Selections (2021–2030)")
 
 fig = px.line(
     forecast_df,
@@ -90,6 +93,7 @@ fig = px.line(
     title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
     template="plotly_white"
 )
+
 fig.update_traces(line=dict(width=4), marker=dict(size=10))
 fig.update_layout(
     yaxis_title="Salary (USD)",
@@ -100,11 +104,11 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# Single Year Prediction
+# Single Year Custom Prediction
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
 
-single_year = st.slider("Select Year", 2020, 2035, 2023)
+single_year = st.slider("Select Year", 2020, 2030, 2023)
 
 single_input = pd.DataFrame({
     "work_year": [single_year],
