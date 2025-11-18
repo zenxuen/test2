@@ -6,6 +6,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
 import plotly.express as px
+import plotly.graph_objects as go
 
 # ---------------------------------------------------------
 # Page Config
@@ -45,10 +46,9 @@ model = Pipeline([
 model.fit(X, y)
 
 # ---------------------------------------------------------
-# Custom Selection (affects future predictions only)
+# Custom Selection
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
-
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -59,72 +59,75 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast future years 2023–2030 (historical years remain fixed)
+# Historical vs Forecast
 # ---------------------------------------------------------
-historical_years = df["work_year"].values
-historical_salaries = df["salary_in_usd"].values
+historical_df = df[
+    (df["job_title"] == custom_job) &
+    (df["experience_level"] == custom_exp) &
+    (df["company_size"] == custom_size)
+].sort_values("work_year")
 
-future_years = np.arange(max(historical_years)+1, 2031)  # 2023–2030
-
-if len(future_years) > 0:
-    future_data = pd.DataFrame({
-        "work_year": future_years,
-        "job_title": custom_job,
-        "experience_level": custom_exp,
-        "company_size": custom_size
-    })
-    future_predictions = model.predict(future_data)
-else:
-    future_years = np.array([])
-    future_predictions = np.array([])
-
-# Combine historical and future data
-all_years = np.concatenate([historical_years, future_years])
-all_salaries = np.concatenate([historical_salaries, future_predictions])
-
+# Forecast for 2021–2030
+future_years = np.arange(2021, 2031)
+future_data = pd.DataFrame({
+    "work_year": future_years,
+    "job_title": custom_job,
+    "experience_level": custom_exp,
+    "company_size": custom_size
+})
+future_predictions = model.predict(future_data)
 forecast_df = pd.DataFrame({
-    "Year": all_years,
-    "Salary (USD)": all_salaries
+    "Year": future_years,
+    "Predicted Salary (USD)": future_predictions
 })
 
 # ---------------------------------------------------------
-# Forecast Graph
+# Plot Graph
 # ---------------------------------------------------------
-st.subheader("📈 Salary Forecast (Historical + Predicted)")
+st.subheader("📈 Salary Forecast vs Historical Data")
 
-fig = px.line(
-    forecast_df,
-    x="Year",
-    y="Salary (USD)",
-    markers=True,
-    title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
-    template="plotly_white"
-)
-fig.update_traces(line=dict(width=4), marker=dict(size=10))
+fig = go.Figure()
+
+# Historical
+if not historical_df.empty:
+    fig.add_trace(go.Scatter(
+        x=historical_df["work_year"],
+        y=historical_df["salary_in_usd"],
+        mode="lines+markers",
+        name="Historical",
+        line=dict(color="blue", width=4),
+        marker=dict(size=10)
+    ))
+
+# Forecast
+fig.add_trace(go.Scatter(
+    x=forecast_df["Year"],
+    y=forecast_df["Predicted Salary (USD)"],
+    mode="lines+markers",
+    name="Forecast",
+    line=dict(color="red", width=4, dash="dash"),
+    marker=dict(size=10)
+))
+
 fig.update_layout(
-    yaxis_title="Salary (USD)",
     xaxis=dict(dtick=1),
-    hovermode="x unified"
+    yaxis_title="Salary (USD)",
+    hovermode="x unified",
+    template="plotly_white"
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# Single Year Custom Prediction
+# Single Year Prediction
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
-
 single_year = st.slider("Select Year", 2020, 2030, 2023)
-
-if single_year in historical_years:
-    single_prediction = df.loc[df["work_year"] == single_year, "salary_in_usd"].values[0]
-else:
-    single_input = pd.DataFrame({
-        "work_year": [single_year],
-        "job_title": [custom_job],
-        "experience_level": [custom_exp],
-        "company_size": [custom_size]
-    })
-    single_prediction = model.predict(single_input)[0]
-
+single_input = pd.DataFrame({
+    "work_year": [single_year],
+    "job_title": [custom_job],
+    "experience_level": [custom_exp],
+    "company_size": [custom_size]
+})
+single_prediction = model.predict(single_input)[0]
 st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
