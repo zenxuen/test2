@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
@@ -16,16 +16,16 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
+st.title("💼 Salary Prediction Dashboard (Dynamic & Accurate)")
 
 # ---------------------------------------------------------
-# Load Dataset (CSV already in Codespace)
+# Load Dataset
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
 # ---------------------------------------------------------
-# Train Model
+# Train Model with interactions for better accuracy
 # ---------------------------------------------------------
 X = df[["work_year", "job_title", "experience_level", "company_size"]]
 y = df["salary_in_usd"]
@@ -33,19 +33,25 @@ y = df["salary_in_usd"]
 categorical_cols = ["job_title", "experience_level", "company_size"]
 
 preprocessor = ColumnTransformer(
-    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
+    transformers=[
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
+    ],
     remainder="passthrough"
 )
 
+# Polynomial features to capture trend across years
+poly = PolynomialFeatures(degree=2, include_bias=False)
+
 model = Pipeline([
     ("prep", preprocessor),
+    ("poly", poly),
     ("reg", LinearRegression())
 ])
 
-model.fit(X, y)  # Model is trained and memorizes the dataset
+model.fit(X, y)
 
 # ---------------------------------------------------------
-# Custom Selection (affects ALL predictions)
+# Custom Selection
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -61,7 +67,7 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast 2021–2030 (based on custom selection)
+# Forecast 2021–2030 based on selection
 # ---------------------------------------------------------
 future_years = np.arange(2021, 2031)
 
@@ -82,7 +88,7 @@ forecast_df = pd.DataFrame({
 # ---------------------------------------------------------
 # Forecast Graph
 # ---------------------------------------------------------
-st.subheader("📈 Salary Forecast Based on Your Selections (2021–2030)")
+st.subheader("📈 Salary Forecast (2021–2030)")
 
 fig = px.line(
     forecast_df,
@@ -95,18 +101,18 @@ fig = px.line(
 fig.update_traces(line=dict(width=4), marker=dict(size=10))
 fig.update_layout(
     yaxis_title="Salary (USD)",
-    xaxis=dict(dtick=1),  # show each year as a tick
+    xaxis=dict(dtick=1),
     hovermode="x unified"
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# Single Year Custom Prediction
+# Single Year Prediction
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
 
-single_year = st.slider("Select Year", 2020, 2030, 2023)
+single_year = st.slider("Select Year", 2021, 2030, 2023)
 
 single_input = pd.DataFrame({
     "work_year": [single_year],
