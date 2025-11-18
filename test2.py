@@ -16,10 +16,10 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
+st.title("💼 Salary Prediction Dashboard (Enhanced Version)")
 
 # ---------------------------------------------------------
-# Load Dataset (CSV already in Codespace)
+# Load Dataset (CSV inside Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
@@ -45,7 +45,7 @@ model = Pipeline([
 model.fit(X, y)
 
 # ---------------------------------------------------------
-# Custom Selection (affects ALL predictions)
+# Model Inputs (Dynamic Selection)
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -60,8 +60,9 @@ with col2:
 with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
+
 # ---------------------------------------------------------
-# Forecast 2021–2035 (based on custom selection)
+# Forecast 2021–2035
 # ---------------------------------------------------------
 future_years = np.arange(2021, 2036)
 
@@ -79,30 +80,47 @@ forecast_df = pd.DataFrame({
     "Predicted Salary (USD)": future_predictions
 })
 
+# Smooth the line visually (optional but better looking)
+forecast_df["Smoothed"] = forecast_df["Predicted Salary (USD)"].rolling(3, min_periods=1).mean()
+
 # ---------------------------------------------------------
-# Forecast Graph
+# Forecast Graph (Improved Visibility and Gaps)
 # ---------------------------------------------------------
 st.subheader("📈 Salary Forecast Based on Your Selections (2021–2035)")
 
 fig = px.line(
     forecast_df,
     x="Year",
-    y="Predicted Salary (USD)",
+    y="Smoothed",
     markers=True,
     title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
     template="plotly_white"
 )
-fig.update_traces(line=dict(width=4), marker=dict(size=10))  # visible line and markers
+
+# Improved visuals
+fig.update_traces(
+    line=dict(width=5),
+    marker=dict(size=11)
+)
+
 fig.update_layout(
     yaxis_title="Salary (USD)",
-    xaxis=dict(dtick=1),  # show each year as a tick
-    hovermode="x unified"
+    xaxis=dict(
+        dtick=1,
+        tickangle=45,
+        tickfont=dict(size=13)
+    ),
+    yaxis=dict(tickfont=dict(size=13)),
+    plot_bgcolor="rgba(0,0,0,0)",
+    hovermode="x unified",
+    margin=dict(l=40, r=40, t=60, b=40)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
+
 # ---------------------------------------------------------
-# Single Year Custom Prediction
+# Single Year Predictor
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
 
