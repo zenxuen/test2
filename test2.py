@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
-import plotly.graph_objects as go
+import plotly.express as px
 
 # ---------------------------------------------------------
 # Page Config
@@ -16,16 +16,16 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Dynamic & Accurate)")
+st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
 
 # ---------------------------------------------------------
-# Load Dataset
+# Load Dataset (CSV already in Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
 # ---------------------------------------------------------
-# Train Model with polynomial features for trend
+# Train Model
 # ---------------------------------------------------------
 X = df[["work_year", "job_title", "experience_level", "company_size"]]
 y = df["salary_in_usd"]
@@ -37,18 +37,15 @@ preprocessor = ColumnTransformer(
     remainder="passthrough"
 )
 
-poly = PolynomialFeatures(degree=2, include_bias=False)
-
 model = Pipeline([
     ("prep", preprocessor),
-    ("poly", poly),
     ("reg", LinearRegression())
 ])
 
-model.fit(X, y)
+model.fit(X, y)  # Model is trained and memorizes the dataset
 
 # ---------------------------------------------------------
-# Custom Selection
+# Custom Selection (affects ALL predictions)
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -64,84 +61,60 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Separate historical and future years
+# Forecast 2021–2030 (based on custom selection)
 # ---------------------------------------------------------
-historical_data = df[
-    (df["job_title"] == custom_job) &
-    (df["experience_level"] == custom_exp) &
-    (df["company_size"] == custom_size)
-]
+future_years = np.arange(2021, 2031)
 
-last_historical_year = historical_data["work_year"].max()
-future_years = np.arange(last_historical_year + 1, 2031)  # forecast starts after last historical year
+custom_future_data = pd.DataFrame({
+    "work_year": future_years,
+    "job_title": custom_job,
+    "experience_level": custom_exp,
+    "company_size": custom_size
+})
 
-# Future predictions
-if len(future_years) > 0:
-    future_df = pd.DataFrame({
-        "work_year": future_years,
-        "job_title": custom_job,
-        "experience_level": custom_exp,
-        "company_size": custom_size
-    })
-    future_predictions = model.predict(future_df)
-else:
-    future_df = pd.DataFrame(columns=["work_year"])
-    future_predictions = []
+future_predictions = model.predict(custom_future_data)
+
+forecast_df = pd.DataFrame({
+    "Year": future_years,
+    "Predicted Salary (USD)": future_predictions
+})
 
 # ---------------------------------------------------------
-# Plotly Forecast Graph
+# Forecast Graph
 # ---------------------------------------------------------
-fig = go.Figure()
+st.subheader("📈 Salary Forecast Based on Your Selections (2021–2030)")
 
-# Historical actual data
-fig.add_trace(go.Scatter(
-    x=historical_data["work_year"],
-    y=historical_data["salary_in_usd"],
-    mode='lines+markers',
-    name='Historical',
-    line=dict(color='blue', width=3),
-    marker=dict(size=8)
-))
-
-# Future forecast
-if len(future_years) > 0:
-    fig.add_trace(go.Scatter(
-        x=future_years,
-        y=future_predictions,
-        mode='lines+markers',
-        name='Forecast',
-        line=dict(color='red', width=4, dash='dash'),
-        marker=dict(size=10)
-    ))
-
-fig.update_layout(
+fig = px.line(
+    forecast_df,
+    x="Year",
+    y="Predicted Salary (USD)",
+    markers=True,
     title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
-    xaxis_title="Year",
-    yaxis_title="Salary (USD)",
-    xaxis=dict(dtick=1),
-    hovermode="x unified",
     template="plotly_white"
 )
+fig.update_traces(line=dict(width=4), marker=dict(size=10))
+fig.update_layout(
+    yaxis_title="Salary (USD)",
+    xaxis=dict(dtick=1),  # show each year as a tick
+    hovermode="x unified"
+)
 
-st.subheader("📈 Salary Forecast (Historical + Forecast)")
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# Single Year Prediction
+# Single Year Custom Prediction
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
 
-single_year = st.slider("Select Year", int(df["work_year"].min()), 2030, int(df["work_year"].min()))
+single_year = st.slider("Select Year", 2020, 2030, 2023)
 
-if single_year in historical_data["work_year"].values:
-    single_prediction = historical_data.loc[historical_data["work_year"] == single_year, "salary_in_usd"].values[0]
-else:
-    single_input = pd.DataFrame({
-        "work_year": [single_year],
-        "job_title": [custom_job],
-        "experience_level": [custom_exp],
-        "company_size": [custom_size]
-    })
-    single_prediction = model.predict(single_input)[0]
+single_input = pd.DataFrame({
+    "work_year": [single_year],
+    "job_title": [custom_job],
+    "experience_level": [custom_exp],
+    "company_size": [custom_size]
+})
+
+single_prediction = model.predict(single_input)[0]
 
 st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
