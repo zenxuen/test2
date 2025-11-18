@@ -10,7 +10,7 @@ st.title("📈 Predictive Model (Year → 2035)")
 # ------------------------------------
 # Load CSV already inside Codespace
 # ------------------------------------
-df = pd.read_csv("salaies_cyber_clean.csv")  # your file inside Codespace
+df = pd.read_csv("salaries_cyber_clean.csv")  # your file inside Codespace
 st.write("### Dataset Preview")
 st.dataframe(df.head())
 
@@ -94,3 +94,4 @@ if feature_cols and target_col:
     st.write("### 📈 Forecast to 2035")
     st.line_chart(prediction_df.set_index("Year"))
     st.dataframe(prediction_df)
+
