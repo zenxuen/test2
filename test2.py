@@ -3,50 +3,50 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
 import plotly.express as px
-import plotly.graph_objects as go
 
-# -----------------------------
+# ---------------------------------------------------------
 # Page Config
-# -----------------------------
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title="💼 Salary Prediction Dashboard",
+    page_title="Salary Prediction Dashboard",
     layout="wide",
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Pro Version)")
+st.title("💼 Salary Prediction Dashboard (Dynamic Model Upgrade)")
 
-# -----------------------------
+# ---------------------------------------------------------
 # Load Dataset (CSV already in Codespace)
-# -----------------------------
+# ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
-# -----------------------------
-# Model Training (memorise dataset)
-# -----------------------------
+# ---------------------------------------------------------
+# Train Model
+# ---------------------------------------------------------
 X = df[["work_year", "job_title", "experience_level", "company_size"]]
 y = df["salary_in_usd"]
 
 categorical_cols = ["job_title", "experience_level", "company_size"]
+
 preprocessor = ColumnTransformer(
-    transformers=[("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols)],
+    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
     remainder="passthrough"
 )
 
 model = Pipeline([
     ("prep", preprocessor),
-    ("reg", LinearRegression())
+    ("reg", RandomForestRegressor(n_estimators=200, random_state=42))
 ])
 
 model.fit(X, y)
 
-# -----------------------------
+# ---------------------------------------------------------
 # Custom Selection
-# -----------------------------
+# ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
 col1, col2, col3 = st.columns(3)
@@ -60,10 +60,11 @@ with col2:
 with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
-# -----------------------------
-# Forecast 2021–2035
-# -----------------------------
+# ---------------------------------------------------------
+# Forecast 2021–2035 (based on custom selection)
+# ---------------------------------------------------------
 future_years = np.arange(2021, 2036)
+
 custom_future_data = pd.DataFrame({
     "work_year": future_years,
     "job_title": custom_job,
@@ -78,49 +79,33 @@ forecast_df = pd.DataFrame({
     "Predicted Salary (USD)": future_predictions
 })
 
-# -----------------------------
-# Interactive Forecast Graph
-# -----------------------------
-st.subheader("📈 Salary Forecast (2021–2035)")
+# ---------------------------------------------------------
+# Forecast Graph
+# ---------------------------------------------------------
+st.subheader(f"📈 Salary Forecast for {custom_job} ({custom_exp}, {custom_size}) (2021–2035)")
 
-fig = go.Figure()
+fig = px.line(
+    forecast_df,
+    x="Year",
+    y="Predicted Salary (USD)",
+    markers=True,
+    template="plotly_white"
+)
 
-# Plot memorised dataset as scatter for context
-fig.add_trace(go.Scatter(
-    x=df["work_year"],
-    y=df["salary_in_usd"],
-    mode="markers",
-    name="Actual Dataset",
-    marker=dict(size=8, color="gray", opacity=0.5),
-    hovertemplate="Year: %{x}<br>Salary: $%{y:,.0f}<extra></extra>"
-))
-
-# Plot predicted line for custom selection
-fig.add_trace(go.Scatter(
-    x=forecast_df["Year"],
-    y=forecast_df["Predicted Salary (USD)"],
-    mode="lines+markers",
-    name=f"{custom_job} ({custom_exp}, {custom_size})",
-    line=dict(width=4, dash="dash"),
-    marker=dict(size=10),
-    hovertemplate="Year: %{x}<br>Predicted Salary: $%{y:,.0f}<extra></extra>"
-))
-
+fig.update_traces(line=dict(width=4), marker=dict(size=10))
 fig.update_layout(
-    template="plotly_white",
-    xaxis_title="Year",
     yaxis_title="Salary (USD)",
     xaxis=dict(dtick=1),
-    hovermode="x unified",
-    title="Salary Forecast vs Actual Data"
+    hovermode="x unified"
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------
-# Single Year Prediction
-# -----------------------------
+# ---------------------------------------------------------
+# Single Year Custom Prediction
+# ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
+
 single_year = st.slider("Select Year", 2020, 2035, 2023)
 
 single_input = pd.DataFrame({
@@ -131,4 +116,5 @@ single_input = pd.DataFrame({
 })
 
 single_prediction = model.predict(single_input)[0]
+
 st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
