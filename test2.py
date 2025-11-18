@@ -16,7 +16,7 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Responsive Model)")
+st.title("💼 Salary Prediction Dashboard (Smoothed Forecast)")
 
 # ---------------------------------------------------------
 # Load Dataset (CSV already in Codespace)
@@ -75,9 +75,12 @@ custom_future_data = pd.DataFrame({
 
 future_predictions = model.predict(custom_future_data)
 
+# Apply simple smoothing (rolling average)
+smoothed_predictions = pd.Series(future_predictions).rolling(window=2, min_periods=1).mean()
+
 forecast_df = pd.DataFrame({
     "Year": future_years,
-    "Predicted Salary (USD)": future_predictions
+    "Predicted Salary (USD)": smoothed_predictions
 })
 
 # ---------------------------------------------------------
