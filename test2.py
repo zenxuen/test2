@@ -1,45 +1,56 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestRegressor
 import plotly.express as px
 
-st.set_page_config(page_title="Salary Prediction", layout="wide")
+# ---------------------------------------------------------
+# Page Config
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="Salary Prediction Dashboard",
+    layout="wide",
+    page_icon="💼"
+)
 
-st.title("💼 Salary Prediction Dashboard (Improved Model)")
+st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
 
 # ---------------------------------------------------------
-# Load Dataset (already in your Codespace)
+# Load Dataset (CSV already in Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
 # ---------------------------------------------------------
-# Train Prediction Model
+# Features & Target
 # ---------------------------------------------------------
 X = df[["work_year", "job_title", "experience_level", "company_size"]]
 y = df["salary_in_usd"]
 
 categorical_cols = ["job_title", "experience_level", "company_size"]
 
+# Preprocessing for categorical features
 preprocessor = ColumnTransformer(
-    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
+    transformers=[("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols)],
     remainder="passthrough"
 )
 
-# ⭐ Use Random Forest for better prediction changes
-model = Pipeline([
-    ("prep", preprocessor),
-    ("rf", RandomForestRegressor(n_estimators=300, random_state=42))
-])
+# Polynomial feature for year to capture growth trend
+poly = PolynomialFeatures(degree=2, include_bias=False)
+X_year_poly = poly.fit_transform(X[["work_year"]])
 
-model.fit(X, y)
+# Combine polynomial year features with categorical features
+X_combined = np.hstack([X_year_poly, preprocessor.fit_transform(X[categorical_cols])])
+
+# Train RandomForestRegressor
+model = RandomForestRegressor(n_estimators=200, random_state=42)
+model.fit(X_combined, y)
 
 # ---------------------------------------------------------
-# Custom selection
+# Custom Selection (affects ALL predictions)
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -55,18 +66,23 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast from dataset start to 2035
+# Forecast 2021–2035 (based on custom selection)
 # ---------------------------------------------------------
-future_years = np.arange(df["work_year"].min(), 2036)
+future_years = np.arange(2021, 2036)
 
-custom_future_data = pd.DataFrame({
-    "work_year": future_years,
-    "job_title": custom_job,
-    "experience_level": custom_exp,
-    "company_size": custom_size
-})
+# Polynomial transform of future years
+future_year_poly = poly.transform(future_years.reshape(-1, 1))
 
-future_predictions = model.predict(custom_future_data)
+# Transform categorical features for future years
+future_cat = preprocessor.transform(pd.DataFrame({
+    "job_title": [custom_job]*len(future_years),
+    "experience_level": [custom_exp]*len(future_years),
+    "company_size": [custom_size]*len(future_years)
+}))
+
+# Combine features for prediction
+future_X = np.hstack([future_year_poly, future_cat])
+future_predictions = model.predict(future_X)
 
 forecast_df = pd.DataFrame({
     "Year": future_years,
@@ -76,7 +92,7 @@ forecast_df = pd.DataFrame({
 # ---------------------------------------------------------
 # Forecast Graph
 # ---------------------------------------------------------
-st.subheader("📈 Salary Forecast Based on Your Selections (to 2035)")
+st.subheader("📈 Salary Forecast Based on Your Selections (2021–2035)")
 
 fig = px.line(
     forecast_df,
@@ -86,26 +102,29 @@ fig = px.line(
     title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
     template="plotly_white"
 )
-
-fig.update_traces(line=dict(width=5), marker=dict(size=12))
-fig.update_layout(xaxis=dict(dtick=1), hovermode="x unified")
+fig.update_traces(line=dict(width=4), marker=dict(size=10))
+fig.update_layout(
+    yaxis_title="Salary (USD)",
+    xaxis=dict(dtick=1),
+    hovermode="x unified"
+)
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# Single prediction
+# Single Year Custom Prediction
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
 
-single_year = st.slider("Select Year", 2020, 2035, 2024)
+single_year = st.slider("Select Year", 2020, 2035, 2023)
 
-single_input = pd.DataFrame({
-    "work_year": [single_year],
+single_year_poly = poly.transform(np.array([[single_year]]))
+single_cat = preprocessor.transform(pd.DataFrame({
     "job_title": [custom_job],
     "experience_level": [custom_exp],
     "company_size": [custom_size]
-})
-
-single_prediction = model.predict(single_input)[0]
+}))
+single_X = np.hstack([single_year_poly, single_cat])
+single_prediction = model.predict(single_X)[0]
 
 st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
