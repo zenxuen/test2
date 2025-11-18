@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
 import plotly.express as px
 
@@ -16,10 +16,10 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Pure Model Prediction)")
+st.title("💼 Salary Prediction Dashboard (Random Forest Model)")
 
 # ---------------------------------------------------------
-# Load Dataset
+# Load Dataset (CSV in Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
@@ -39,10 +39,10 @@ preprocessor = ColumnTransformer(
 
 model = Pipeline([
     ("prep", preprocessor),
-    ("reg", LinearRegression())
+    ("reg", RandomForestRegressor(n_estimators=200, random_state=42))
 ])
 
-model.fit(X, y)
+model.fit(X, y)  # The model is now trained
 
 # ---------------------------------------------------------
 # Custom Selection
@@ -61,7 +61,7 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast 2021–2035 (based on custom selection)
+# Forecast 2021–2035
 # ---------------------------------------------------------
 future_years = np.arange(2021, 2036)
 
