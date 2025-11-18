@@ -1,3 +1,6 @@
+import numpy as np
+
+
 # -------------------------
 # Forecast 2021–2035 (based on custom selection)
 # -------------------------
@@ -43,3 +46,4 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
