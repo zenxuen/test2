@@ -16,10 +16,10 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
+st.title("💼 Salary Prediction Dashboard (Dynamic Model with Trend)")
 
 # ---------------------------------------------------------
-# Load Dataset
+# Load Dataset (CSV in Codespace)
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
@@ -33,7 +33,7 @@ y = df["salary_in_usd"]
 categorical_cols = ["job_title", "experience_level", "company_size"]
 
 preprocessor = ColumnTransformer(
-    transformers=[("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols)],
+    transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
     remainder="passthrough"
 )
 
@@ -45,7 +45,7 @@ model = Pipeline([
 model.fit(X, y)
 
 # ---------------------------------------------------------
-# Custom Selection (affects ALL predictions)
+# Custom Selection
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -61,12 +61,9 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast 2021–2035 (dynamic with visible gaps)
+# Forecast 2021–2035 (based on custom selection)
 # ---------------------------------------------------------
 future_years = np.arange(2021, 2036)
-
-# Add a small offset based on hash of selection to make line visibly move
-offset = (hash(custom_job + custom_exp + custom_size) % 1000) - 500
 
 custom_future_data = pd.DataFrame({
     "work_year": future_years,
@@ -75,12 +72,17 @@ custom_future_data = pd.DataFrame({
     "company_size": custom_size
 })
 
-future_predictions = model.predict(custom_future_data) + offset  # apply offset
+# Base predictions from model
+future_predictions = model.predict(custom_future_data)
+
+# Apply realistic annual growth
+growth_rate = 0.05  # 5% per year
+base_year = custom_future_data["work_year"].min()
+future_predictions = future_predictions * (1 + growth_rate) ** (custom_future_data["work_year"] - base_year)
 
 forecast_df = pd.DataFrame({
     "Year": future_years,
-    "Predicted Salary (USD)": future_predictions,
-    "Selection": [f"{custom_job}-{custom_exp}-{custom_size}"]*len(future_years)
+    "Predicted Salary (USD)": future_predictions
 })
 
 # ---------------------------------------------------------
@@ -93,12 +95,10 @@ fig = px.line(
     x="Year",
     y="Predicted Salary (USD)",
     markers=True,
-    color="Selection",
-    title="Salary Forecast (Dynamic Lines)",
+    title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
     template="plotly_white"
 )
-
-fig.update_traces(line=dict(width=4), marker=dict(size=10))
+fig.update_traces(line=dict(width=4, dash="solid"), marker=dict(size=10))
 fig.update_layout(
     yaxis_title="Salary (USD)",
     xaxis=dict(dtick=1),
@@ -121,6 +121,9 @@ single_input = pd.DataFrame({
     "company_size": [custom_size]
 })
 
-single_prediction = model.predict(single_input)[0] + offset  # apply same offset
+single_prediction = model.predict(single_input)[0]
+
+# Apply same growth trend
+single_prediction *= (1 + growth_rate) ** (single_year - base_year)
 
 st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
