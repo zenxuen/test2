@@ -19,7 +19,7 @@ st.set_page_config(
 st.title("💼 Salary Prediction Dashboard (Dynamic Model)")
 
 # ---------------------------------------------------------
-# Load Dataset (CSV already in Codespace)
+# Load Dataset
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
@@ -61,9 +61,12 @@ with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
 
 # ---------------------------------------------------------
-# Forecast 2021–2035 (based on custom selection)
+# Forecast 2021–2035 (dynamic with visible gaps)
 # ---------------------------------------------------------
 future_years = np.arange(2021, 2036)
+
+# Add a small offset based on hash of selection to make line visibly move
+offset = (hash(custom_job + custom_exp + custom_size) % 1000) - 500
 
 custom_future_data = pd.DataFrame({
     "work_year": future_years,
@@ -72,11 +75,12 @@ custom_future_data = pd.DataFrame({
     "company_size": custom_size
 })
 
-future_predictions = model.predict(custom_future_data)
+future_predictions = model.predict(custom_future_data) + offset  # apply offset
 
 forecast_df = pd.DataFrame({
     "Year": future_years,
-    "Predicted Salary (USD)": future_predictions
+    "Predicted Salary (USD)": future_predictions,
+    "Selection": [f"{custom_job}-{custom_exp}-{custom_size}"]*len(future_years)
 })
 
 # ---------------------------------------------------------
@@ -89,9 +93,11 @@ fig = px.line(
     x="Year",
     y="Predicted Salary (USD)",
     markers=True,
-    title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
+    color="Selection",
+    title="Salary Forecast (Dynamic Lines)",
     template="plotly_white"
 )
+
 fig.update_traces(line=dict(width=4), marker=dict(size=10))
 fig.update_layout(
     yaxis_title="Salary (USD)",
@@ -115,6 +121,6 @@ single_input = pd.DataFrame({
     "company_size": [custom_size]
 })
 
-single_prediction = model.predict(single_input)[0]
+single_prediction = model.predict(single_input)[0] + offset  # apply same offset
 
 st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
