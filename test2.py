@@ -121,4 +121,16 @@ st.subheader("🔮 Predict Salary for a Specific Year")
 single_year = st.slider("Select Year", 2020, 2035, 2023)
 single_job = st.selectbox("Job Title (Single)", sorted(df["job_title"].unique()), index=0)
 single_exp = st.selectbox("Experience Level (Single)", sorted(df["experience_level"].unique()), index=0)
-single_size = st.selectbox("Company Size (Single)", sort_
+single_size = st.selectbox("Company Size (Single)", sorted(df["company_size"].unique()), index=0)
+
+single_input = pd.DataFrame({
+    "work_year": [single_year],
+    "job_title": [single_job],
+    "experience_level": [single_exp],
+    "company_size": [single_size]
+})
+
+single_prediction = model.predict(single_input)[0]
+
+st.metric("💰 Predicted Salary", f"${single_prediction:,.2f}")
+
