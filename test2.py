@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
 import plotly.express as px
 
@@ -16,16 +16,16 @@ st.set_page_config(
     page_icon="💼"
 )
 
-st.title("💼 Salary Prediction Dashboard (Enhanced Version)")
+st.title("💼 Salary Prediction Dashboard (Improved Predictive Model)")
 
 # ---------------------------------------------------------
-# Load Dataset (CSV inside Codespace)
+# Load Dataset
 # ---------------------------------------------------------
 file_path = "salaries_cyber_clean.csv"
 df = pd.read_csv(file_path)
 
 # ---------------------------------------------------------
-# Train Model
+# Prepare Data
 # ---------------------------------------------------------
 X = df[["work_year", "job_title", "experience_level", "company_size"]]
 y = df["salary_in_usd"]
@@ -37,15 +37,22 @@ preprocessor = ColumnTransformer(
     remainder="passthrough"
 )
 
+# ---------------------------------------------------------
+# IMPROVED MODEL — Random Forest
+# ---------------------------------------------------------
 model = Pipeline([
     ("prep", preprocessor),
-    ("reg", LinearRegression())
+    ("rf", RandomForestRegressor(
+        n_estimators=300,
+        random_state=42,
+        max_depth=12
+    ))
 ])
 
 model.fit(X, y)
 
 # ---------------------------------------------------------
-# Model Inputs (Dynamic Selection)
+# Custom Selection
 # ---------------------------------------------------------
 st.subheader("⚙️ Customize Model Inputs")
 
@@ -59,7 +66,6 @@ with col2:
 
 with col3:
     custom_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
-
 
 # ---------------------------------------------------------
 # Forecast 2021–2035
@@ -80,47 +86,37 @@ forecast_df = pd.DataFrame({
     "Predicted Salary (USD)": future_predictions
 })
 
-# Smooth the line visually (optional but better looking)
-forecast_df["Smoothed"] = forecast_df["Predicted Salary (USD)"].rolling(3, min_periods=1).mean()
-
 # ---------------------------------------------------------
-# Forecast Graph (Improved Visibility and Gaps)
+# Improved Forecast Graph
 # ---------------------------------------------------------
 st.subheader("📈 Salary Forecast Based on Your Selections (2021–2035)")
 
 fig = px.line(
     forecast_df,
     x="Year",
-    y="Smoothed",
+    y="Predicted Salary (USD)",
     markers=True,
     title=f"Salary Forecast for {custom_job} ({custom_exp}, {custom_size})",
     template="plotly_white"
 )
 
-# Improved visuals
 fig.update_traces(
     line=dict(width=5),
-    marker=dict(size=11)
+    marker=dict(size=12),
+    hovertemplate='<b>Year %{x}</b><br>Salary: $%{y:,.0f}<extra></extra>'
 )
 
 fig.update_layout(
     yaxis_title="Salary (USD)",
-    xaxis=dict(
-        dtick=1,
-        tickangle=45,
-        tickfont=dict(size=13)
-    ),
-    yaxis=dict(tickfont=dict(size=13)),
-    plot_bgcolor="rgba(0,0,0,0)",
+    xaxis=dict(dtick=1),
     hovermode="x unified",
-    margin=dict(l=40, r=40, t=60, b=40)
+    margin=dict(l=30, r=30, t=50, b=30)
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-
 # ---------------------------------------------------------
-# Single Year Predictor
+# Single Year Prediction
 # ---------------------------------------------------------
 st.subheader("🔮 Predict Salary for a Specific Year")
 
