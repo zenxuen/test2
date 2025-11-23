@@ -148,8 +148,8 @@ with tab1:
     with col3:
         custom_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
     
-    # Forecast 2023–2030 (excluding 2020-2022 as they already have data)
-    future_years = np.arange(2023, 2031)
+    # Forecast 2026–2030 (data exists for 2020-2025, predict future years)
+    future_years = np.arange(2026, 2031)
     custom_future_data = pd.DataFrame({
         "work_year": future_years,
         "job_title": custom_job,
@@ -168,12 +168,12 @@ with tab1:
     st.markdown("---")
     col_a, col_b, col_c = st.columns(3)
     with col_a:
-        st.metric("📅 Starting Salary (2023)", f"${forecast_df.iloc[0]['Predicted Salary (USD)']:,.0f}")
+        st.metric("📅 Starting Salary (2026)", f"${forecast_df.iloc[0]['Predicted Salary (USD)']:,.0f}")
     with col_b:
-        st.metric("📅 Mid-Point (2026)", f"${forecast_df.iloc[3]['Predicted Salary (USD)']:,.0f}")
+        st.metric("📅 Mid-Point (2028)", f"${forecast_df.iloc[2]['Predicted Salary (USD)']:,.0f}")
     with col_c:
         growth = ((forecast_df.iloc[-1]['Predicted Salary (USD)'] - forecast_df.iloc[0]['Predicted Salary (USD)']) / forecast_df.iloc[0]['Predicted Salary (USD)']) * 100
-        st.metric("📈 8-Year Growth", f"{growth:.1f}%")
+        st.metric("📈 5-Year Growth", f"{growth:.1f}%")
     
     fig = go.Figure()
     
@@ -253,8 +253,8 @@ with tab2:
     job_salaries_for_year = []
     
     for job in all_jobs:
-        # Use actual data for 2020-2022 if available
-        if selected_year_top <= 2022:
+        # Use actual data for 2020-2025 if available
+        if selected_year_top <= 2025:
             actual_data = df[(df["job_title"] == job) & (df["work_year"] == selected_year_top)]
             if len(actual_data) > 0:
                 avg_salary = actual_data["salary_in_usd"].mean()
@@ -263,7 +263,7 @@ with tab2:
                     "salary": avg_salary
                 })
         else:
-            # Predict for 2023-2030
+            # Predict for 2026-2030
             job_data = df[df["job_title"] == job]
             if len(job_data) > 0:
                 most_common_exp = job_data["experience_level"].mode()[0]
@@ -286,7 +286,7 @@ with tab2:
     top_jobs_year = pd.DataFrame(job_salaries_for_year).sort_values("salary", ascending=False).head(10)
     
     # Determine if this year uses actual or predicted data
-    data_type = "Actual Data" if selected_year_top <= 2022 else "Predicted Data"
+    data_type = "Actual Data" if selected_year_top <= 2025 else "Predicted Data"
     
     fig_top = px.bar(
         top_jobs_year,
@@ -319,7 +319,7 @@ with tab2:
             most_common_size = job_data_full["company_size"].mode()[0]
             
             for year in all_years:
-                if year <= 2022:
+                if year <= 2025:
                     # Use actual data
                     actual_data = df[(df["job_title"] == job) & (df["work_year"] == year)]
                     if len(actual_data) > 0:
@@ -336,7 +336,7 @@ with tab2:
                         salary = selected_model.predict(pred_input)[0]
                         data_type_point = "Predicted"
                 else:
-                    # Predict for 2023-2030
+                    # Predict for 2026-2030
                     pred_input = pd.DataFrame({
                         "work_year": [year],
                         "job_title": [job],
@@ -366,7 +366,7 @@ with tab2:
     )
     
     # Add a vertical line to separate actual from predicted
-    fig_trends.add_vline(x=2022.5, line_dash="dash", line_color="gray", 
+    fig_trends.add_vline(x=2025.5, line_dash="dash", line_color="gray", 
                          annotation_text="Actual | Predicted", 
                          annotation_position="top")
     
@@ -385,7 +385,7 @@ with tab3:
         calc_year = st.slider("📅 Select Year", 2020, 2035, 2025)
     
     # Determine if we're using actual data or prediction
-    is_actual_data = (calc_year >= 2020 and calc_year <= 2022)
+    is_actual_data = (calc_year >= 2020 and calc_year <= 2025)
     
     if is_actual_data:
         # Try to get actual data
@@ -449,7 +449,7 @@ with tab3:
     st.subheader("📊 Market Comparison")
     
     # Get market average for the selected year and job
-    if calc_year >= 2020 and calc_year <= 2022:
+    if calc_year >= 2020 and calc_year <= 2025:
         market_data = df[(df["job_title"] == custom_job) & (df["work_year"] == calc_year)]
         if len(market_data) > 0:
             market_avg = market_data["salary_in_usd"].mean()
