@@ -73,6 +73,9 @@ st.sidebar.info(f"""
 - **Avg Salary:** ${df['salary_in_usd'].mean():,.0f}
 """)
 
+# Show current model being used
+st.sidebar.success(f"**Active Model:** {model_type}")
+
 # ---------------------------------------------------------
 # Train Models with Performance Metrics
 # ---------------------------------------------------------
