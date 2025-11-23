@@ -575,17 +575,36 @@ with tab3:
     st.subheader("📊 Market Comparison")
     
     # Get market average for the selected year and job
-    if calc_year >= 2020 and calc_year <= 2025:
+    if calc_year >= 2020 and calc_year <= 2022:
+        # For years with actual data, use year-specific market average
         market_data = df[(df["job_title"] == custom_job) & (df["work_year"] == calc_year)]
         if len(market_data) > 0:
             market_avg = market_data["salary_in_usd"].mean()
             market_label = f"Market Avg ({calc_year})"
         else:
+            # If no data for this specific year, use overall average for this job
             market_avg = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
             market_label = "Overall Market Avg"
     else:
-        market_avg = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
-        market_label = "Historical Market Avg"
+        # For future years (2023+), predict market average for the job
+        # Use median experience level and company size for market average
+        job_data = df[df["job_title"] == custom_job]
+        if len(job_data) > 0:
+            # Get most common experience and company size for this job
+            common_exp = job_data["experience_level"].mode()[0]
+            common_size = job_data["company_size"].mode()[0]
+            
+            market_pred_input = pd.DataFrame({
+                "work_year": [calc_year],
+                "job_title": [custom_job],
+                "experience_level": [common_exp],
+                "company_size": [common_size]
+            })
+            market_avg = selected_model.predict(market_pred_input)[0]
+            market_label = f"Predicted Market Avg ({calc_year})"
+        else:
+            market_avg = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
+            market_label = "Overall Market Avg"
     
     diff = salary_value - market_avg
     diff_pct = (diff / market_avg) * 100 if market_avg > 0 else 0
@@ -597,6 +616,10 @@ with tab3:
         st.metric(market_label, f"${market_avg:,.0f}")
     with col3:
         st.metric("Difference", f"${diff:,.0f}", f"{diff_pct:+.1f}%")
+    
+    # Add explanation
+    if calc_year >= 2023:
+        st.caption(f"💡 Market average for {calc_year} is predicted using the most common experience level ({common_exp}) and company size ({common_size}) for {custom_job}.")
 
 # ---------------------------------------------------------
 # TAB 4: Insights
