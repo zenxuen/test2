@@ -283,30 +283,43 @@ with tab2:
                 })
     
     # Convert to DataFrame and get top 10
-    top_jobs_year = pd.DataFrame(job_salaries_for_year).sort_values("salary", ascending=False).head(10)
+    if len(job_salaries_for_year) > 0:
+        top_jobs_year = pd.DataFrame(job_salaries_for_year).sort_values("salary", ascending=False).head(10)
+    else:
+        st.warning(f"⚠️ No data available for {selected_year_top}. Please select a different year.")
+        top_jobs_year = pd.DataFrame(columns=["job_title", "salary"])
     
     # Determine if this year uses actual or predicted data
     data_type = "Actual Data" if selected_year_top <= 2025 else "Predicted Data"
     
-    fig_top = px.bar(
-        top_jobs_year,
-        x="salary",
-        y="job_title",
-        orientation='h',
-        title=f"Top 10 Highest Paying Jobs in {selected_year_top} ({data_type})",
-        color="salary",
-        color_continuous_scale="Turbo",
-        labels={"salary": "Avg Salary (USD)", "job_title": "Job Title"}
-    )
-    fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, xaxis_title="Avg Salary (USD)", yaxis_title="")
-    st.plotly_chart(fig_top, use_container_width=True)
+    if len(top_jobs_year) > 0:
+        fig_top = px.bar(
+            top_jobs_year,
+            x="salary",
+            y="job_title",
+            orientation='h',
+            title=f"Top 10 Highest Paying Jobs in {selected_year_top} ({data_type})",
+            color="salary",
+            color_continuous_scale="Turbo",
+            labels={"salary": "Avg Salary (USD)", "job_title": "Job Title"}
+        )
+        fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, xaxis_title="Avg Salary (USD)", yaxis_title="")
+        st.plotly_chart(fig_top, use_container_width=True)
     
     # Show salary comparison across years for top job
     st.markdown("---")
     st.subheader("📈 Salary Trends for Top 3 Highest Paying Jobs")
     
     # Get top 3 jobs from current selected year
-    top_3_jobs = top_jobs_year.head(3)["job_title"].tolist()
+    if len(top_jobs_year) >= 3:
+        top_3_jobs = top_jobs_year.head(3)["job_title"].tolist()
+    elif len(top_jobs_year) > 0:
+        top_3_jobs = top_jobs_year["job_title"].tolist()
+    else:
+        st.info("ℹ️ Select a year with available data to view salary trends.")
+        top_3_jobs = []
+    
+    if len(top_3_jobs) > 0:
     
     # Prepare data for all years (2021-2030) for these top 3 jobs
     all_years = np.arange(2021, 2031)
@@ -353,25 +366,25 @@ with tab2:
                     "type": data_type_point
                 })
     
-    trends_df = pd.DataFrame(job_salary_trends)
-    
-    fig_trends = px.line(
-        trends_df,
-        x="year",
-        y="salary",
-        color="job_title",
-        markers=True,
-        title="Salary Trends (2021-2030) - Top 3 Jobs",
-        labels={"year": "Year", "salary": "Salary (USD)", "job_title": "Job Title"}
-    )
-    
-    # Add a vertical line to separate actual from predicted
-    fig_trends.add_vline(x=2025.5, line_dash="dash", line_color="gray", 
-                         annotation_text="Actual | Predicted", 
-                         annotation_position="top")
-    
-    fig_trends.update_layout(hovermode="x unified", height=500)
-    st.plotly_chart(fig_trends, use_container_width=True)
+        trends_df = pd.DataFrame(job_salary_trends)
+        
+        fig_trends = px.line(
+            trends_df,
+            x="year",
+            y="salary",
+            color="job_title",
+            markers=True,
+            title="Salary Trends (2021-2030) - Top 3 Jobs",
+            labels={"year": "Year", "salary": "Salary (USD)", "job_title": "Job Title"}
+        )
+        
+        # Add a vertical line to separate actual from predicted
+        fig_trends.add_vline(x=2025.5, line_dash="dash", line_color="gray", 
+                             annotation_text="Actual | Predicted", 
+                             annotation_position="top")
+        
+        fig_trends.update_layout(hovermode="x unified", height=500)
+        st.plotly_chart(fig_trends, use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 3: Salary Calculator
