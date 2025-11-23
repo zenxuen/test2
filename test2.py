@@ -154,7 +154,7 @@ with tab1:
     
     for year in all_forecast_years:
         if year <= 2022:
-            # Try to get actual data
+            # Try to get actual data with exact match
             actual_data = df[
                 (df["work_year"] == year) & 
                 (df["job_title"] == custom_job) & 
@@ -166,15 +166,36 @@ with tab1:
                 salary = actual_data["salary_in_usd"].mean()
                 data_source = "Actual"
             else:
-                # If no exact match, use prediction
-                pred_input = pd.DataFrame({
-                    "work_year": [year],
-                    "job_title": [custom_job],
-                    "experience_level": [custom_exp],
-                    "company_size": [custom_size]
-                })
-                salary = selected_model.predict(pred_input)[0]
-                data_source = "Predicted"
+                # Try without company size
+                actual_data_partial = df[
+                    (df["work_year"] == year) & 
+                    (df["job_title"] == custom_job) & 
+                    (df["experience_level"] == custom_exp)
+                ]
+                
+                if len(actual_data_partial) > 0:
+                    salary = actual_data_partial["salary_in_usd"].mean()
+                    data_source = "Actual (Partial Match)"
+                else:
+                    # Try with just job title
+                    actual_data_job = df[
+                        (df["work_year"] == year) & 
+                        (df["job_title"] == custom_job)
+                    ]
+                    
+                    if len(actual_data_job) > 0:
+                        salary = actual_data_job["salary_in_usd"].mean()
+                        data_source = "Actual (Job Only)"
+                    else:
+                        # Use prediction if no match at all
+                        pred_input = pd.DataFrame({
+                            "work_year": [year],
+                            "job_title": [custom_job],
+                            "experience_level": [custom_exp],
+                            "company_size": [custom_size]
+                        })
+                        salary = selected_model.predict(pred_input)[0]
+                        data_source = "Predicted"
         else:
             # Predict for 2023-2030
             pred_input = pd.DataFrame({
@@ -193,6 +214,13 @@ with tab1:
         })
     
     forecast_df = pd.DataFrame(forecast_data)
+    
+    # Display data source information
+    st.info(f"""
+    **Data Sources Used:**
+    - Years with Actual Data: {', '.join(map(str, forecast_df[forecast_df['Source'].str.contains('Actual')]['Year'].tolist()))}
+    - Years with Predicted Data: {', '.join(map(str, forecast_df[forecast_df['Source'] == 'Predicted']['Year'].tolist()))}
+    """)
     
     # Enhanced Graph
     st.markdown("---")
@@ -215,8 +243,8 @@ with tab1:
     # Create visualization with color distinction
     fig = go.Figure()
     
-    # Actual data (2020-2022)
-    actual_df = forecast_df[forecast_df["Source"] == "Actual"]
+    # Actual data (any year with actual data)
+    actual_df = forecast_df[forecast_df["Source"].str.contains("Actual")]
     if len(actual_df) > 0:
         fig.add_trace(go.Scatter(
             x=actual_df["Year"],
@@ -226,10 +254,11 @@ with tab1:
             line=dict(color='#10b981', width=4),
             marker=dict(size=12, color='#10b981', line=dict(width=2, color='white')),
             fill='tozeroy',
-            fillcolor='rgba(16, 185, 129, 0.1)'
+            fillcolor='rgba(16, 185, 129, 0.1)',
+            hovertemplate='Year: %{x}<br>Salary: $%{y:,.0f}<br>Source: Actual<extra></extra>'
         ))
     
-    # Predicted data (2023-2030)
+    # Predicted data
     predicted_df = forecast_df[forecast_df["Source"] == "Predicted"]
     if len(predicted_df) > 0:
         fig.add_trace(go.Scatter(
@@ -240,7 +269,8 @@ with tab1:
             line=dict(color='#667eea', width=4, dash='dash'),
             marker=dict(size=12, color='#764ba2', line=dict(width=2, color='white')),
             fill='tozeroy',
-            fillcolor='rgba(102, 126, 234, 0.1)'
+            fillcolor='rgba(102, 126, 234, 0.1)',
+            hovertemplate='Year: %{x}<br>Salary: $%{y:,.0f}<br>Source: Predicted<extra></extra>'
         ))
     
     fig.update_layout(
