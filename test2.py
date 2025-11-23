@@ -320,26 +320,35 @@ with tab2:
         top_3_jobs = []
     
     if len(top_3_jobs) > 0:
-    
-    # Prepare data for all years (2021-2030) for these top 3 jobs
-    all_years = np.arange(2021, 2031)
-    job_salary_trends = []
-    
-    for job in top_3_jobs:
-        job_data_full = df[df["job_title"] == job]
-        if len(job_data_full) > 0:
-            most_common_exp = job_data_full["experience_level"].mode()[0]
-            most_common_size = job_data_full["company_size"].mode()[0]
-            
-            for year in all_years:
-                if year <= 2025:
-                    # Use actual data
-                    actual_data = df[(df["job_title"] == job) & (df["work_year"] == year)]
-                    if len(actual_data) > 0:
-                        salary = actual_data["salary_in_usd"].mean()
-                        data_type_point = "Actual"
+        # Prepare data for all years (2021-2030) for these top 3 jobs
+        all_years = np.arange(2021, 2031)
+        job_salary_trends = []
+        
+        for job in top_3_jobs:
+            job_data_full = df[df["job_title"] == job]
+            if len(job_data_full) > 0:
+                most_common_exp = job_data_full["experience_level"].mode()[0]
+                most_common_size = job_data_full["company_size"].mode()[0]
+                
+                for year in all_years:
+                    if year <= 2025:
+                        # Use actual data
+                        actual_data = df[(df["job_title"] == job) & (df["work_year"] == year)]
+                        if len(actual_data) > 0:
+                            salary = actual_data["salary_in_usd"].mean()
+                            data_type_point = "Actual"
+                        else:
+                            # If no actual data, predict
+                            pred_input = pd.DataFrame({
+                                "work_year": [year],
+                                "job_title": [job],
+                                "experience_level": [most_common_exp],
+                                "company_size": [most_common_size]
+                            })
+                            salary = selected_model.predict(pred_input)[0]
+                            data_type_point = "Predicted"
                     else:
-                        # If no actual data, predict
+                        # Predict for 2026-2030
                         pred_input = pd.DataFrame({
                             "work_year": [year],
                             "job_title": [job],
@@ -348,24 +357,14 @@ with tab2:
                         })
                         salary = selected_model.predict(pred_input)[0]
                         data_type_point = "Predicted"
-                else:
-                    # Predict for 2026-2030
-                    pred_input = pd.DataFrame({
-                        "work_year": [year],
-                        "job_title": [job],
-                        "experience_level": [most_common_exp],
-                        "company_size": [most_common_size]
+                    
+                    job_salary_trends.append({
+                        "job_title": job,
+                        "year": year,
+                        "salary": salary,
+                        "type": data_type_point
                     })
-                    salary = selected_model.predict(pred_input)[0]
-                    data_type_point = "Predicted"
-                
-                job_salary_trends.append({
-                    "job_title": job,
-                    "year": year,
-                    "salary": salary,
-                    "type": data_type_point
-                })
-    
+        
         trends_df = pd.DataFrame(job_salary_trends)
         
         fig_trends = px.line(
