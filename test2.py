@@ -148,8 +148,8 @@ with tab1:
     with col3:
         custom_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
     
-    # Forecast 2021–2030
-    future_years = np.arange(2021, 2031)
+    # Forecast 2023–2030 (excluding 2020-2022 as they already have data)
+    future_years = np.arange(2023, 2031)
     custom_future_data = pd.DataFrame({
         "work_year": future_years,
         "job_title": custom_job,
@@ -168,12 +168,12 @@ with tab1:
     st.markdown("---")
     col_a, col_b, col_c = st.columns(3)
     with col_a:
-        st.metric("📅 Starting Salary (2021)", f"${forecast_df.iloc[0]['Predicted Salary (USD)']:,.0f}")
+        st.metric("📅 Starting Salary (2023)", f"${forecast_df.iloc[0]['Predicted Salary (USD)']:,.0f}")
     with col_b:
-        st.metric("📅 Current Salary (2025)", f"${forecast_df.iloc[4]['Predicted Salary (USD)']:,.0f}")
+        st.metric("📅 Mid-Point (2026)", f"${forecast_df.iloc[3]['Predicted Salary (USD)']:,.0f}")
     with col_c:
         growth = ((forecast_df.iloc[-1]['Predicted Salary (USD)'] - forecast_df.iloc[0]['Predicted Salary (USD)']) / forecast_df.iloc[0]['Predicted Salary (USD)']) * 100
-        st.metric("📈 10-Year Growth", f"{growth:.1f}%")
+        st.metric("📈 8-Year Growth", f"{growth:.1f}%")
     
     fig = go.Figure()
     
@@ -236,22 +236,96 @@ with tab2:
         fig_size.update_layout(showlegend=False, xaxis_title="Company Size", yaxis_title="Avg Salary (USD)")
         st.plotly_chart(fig_size, use_container_width=True)
     
-    # Top Paying Jobs
+    # Top Paying Jobs 2021-2030
     st.markdown("---")
-    st.subheader("💎 Top 10 Highest Paying Jobs")
-    top_jobs = df.groupby("job_title")["salary_in_usd"].mean().sort_values(ascending=False).head(10).reset_index()
+    st.subheader("💎 Top 10 Highest Paying Jobs (2021-2030)")
+    
+    # Get all unique job titles
+    all_jobs = df["job_title"].unique()
+    
+    # Prepare data for all years (2021-2030)
+    all_years = np.arange(2021, 2031)
+    job_salary_data = []
+    
+    for job in all_jobs:
+        for year in all_years:
+            # Use actual data for 2021-2022 if available
+            if year <= 2022:
+                actual_data = df[(df["job_title"] == job) & (df["work_year"] == year)]
+                if len(actual_data) > 0:
+                    avg_salary = actual_data["salary_in_usd"].mean()
+                    job_salary_data.append({
+                        "job_title": job,
+                        "year": year,
+                        "salary": avg_salary,
+                        "type": "Actual"
+                    })
+            else:
+                # Predict for 2023-2030
+                # Use most common experience level and company size for this job
+                job_data = df[df["job_title"] == job]
+                if len(job_data) > 0:
+                    most_common_exp = job_data["experience_level"].mode()[0]
+                    most_common_size = job_data["company_size"].mode()[0]
+                    
+                    pred_input = pd.DataFrame({
+                        "work_year": [year],
+                        "job_title": [job],
+                        "experience_level": [most_common_exp],
+                        "company_size": [most_common_size]
+                    })
+                    
+                    predicted_salary = selected_model.predict(pred_input)[0]
+                    job_salary_data.append({
+                        "job_title": job,
+                        "year": year,
+                        "salary": predicted_salary,
+                        "type": "Predicted"
+                    })
+    
+    # Convert to DataFrame
+    job_salary_df = pd.DataFrame(job_salary_data)
+    
+    # Calculate average salary across all years for each job
+    top_jobs_2021_2030 = job_salary_df.groupby("job_title")["salary"].mean().sort_values(ascending=False).head(10).reset_index()
     
     fig_top = px.bar(
-        top_jobs,
-        x="salary_in_usd",
+        top_jobs_2021_2030,
+        x="salary",
         y="job_title",
         orientation='h',
-        title="Top 10 Highest Paying Job Titles",
-        color="salary_in_usd",
-        color_continuous_scale="Turbo"
+        title="Top 10 Highest Paying Job Titles (Average 2021-2030)",
+        color="salary",
+        color_continuous_scale="Turbo",
+        labels={"salary": "Avg Salary (USD)", "job_title": "Job Title"}
     )
     fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, xaxis_title="Avg Salary (USD)", yaxis_title="")
     st.plotly_chart(fig_top, use_container_width=True)
+    
+    # Show detailed breakdown by year for top 3 jobs
+    st.markdown("---")
+    st.subheader("📈 Salary Trends for Top 3 Highest Paying Jobs")
+    
+    top_3_jobs = top_jobs_2021_2030.head(3)["job_title"].tolist()
+    top_3_data = job_salary_df[job_salary_df["job_title"].isin(top_3_jobs)]
+    
+    fig_trends = px.line(
+        top_3_data,
+        x="year",
+        y="salary",
+        color="job_title",
+        markers=True,
+        title="Salary Trends (2021-2030) - Actual + Predicted",
+        labels={"year": "Year", "salary": "Salary (USD)", "job_title": "Job Title"}
+    )
+    
+    # Add a vertical line to separate actual from predicted
+    fig_trends.add_vline(x=2022.5, line_dash="dash", line_color="gray", 
+                         annotation_text="Actual | Predicted", 
+                         annotation_position="top")
+    
+    fig_trends.update_layout(hovermode="x unified", height=500)
+    st.plotly_chart(fig_trends, use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 3: Salary Calculator
