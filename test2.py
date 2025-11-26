@@ -511,7 +511,7 @@ with tab3:
         calc_year = st.slider("📅 Select Year", 2020, 2035, 2025)
     
     # Determine if we're using actual data or prediction
-    is_actual_data = (calc_year >= 2020 and calc_year <= 2025)
+    is_actual_data = (calc_year >= 2020 and calc_year <= 2022)
     
     if is_actual_data:
         # Try to get actual data
