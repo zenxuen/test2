@@ -10,7 +10,8 @@ import plotly.express as px
 # Page Config
 # ---------------------------------------------------------
 st.set_page_config(page_title="Salary Predictor", layout="wide")
-st.title("📈 Cybersecurity Salary Predictor (2021 - 2025)")
+st.title("📈 Cybersecurity Salary Predictor (2020 - 2030)")
+st.markdown("*Predicting salaries using actual data (2020-2022) and Random Forest model (2023-2030)*")
 
 # ---------------------------------------------------------
 # Load CSV
@@ -52,7 +53,7 @@ st.markdown("Select your profile details to get a salary prediction:")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    calc_work_year = st.selectbox("📅 Work Year", sorted(df['work_year'].unique()), key="calc_year")
+    calc_work_year = st.selectbox("📅 Work Year", list(range(2020, 2031)), index=5, key="calc_year")
     calc_experience = st.selectbox("📈 Experience Level", sorted(df['experience_level'].unique()), key="calc_exp")
     calc_employment = st.selectbox("💼 Employment Type", sorted(df['employment_type'].unique()), key="calc_emp")
 
@@ -77,17 +78,60 @@ calc_input = pd.DataFrame([{
     'company_size': calc_size
 }])
 
-calc_predicted_salary = model.predict(calc_input)[0]
+# Calculate prediction or use actual data
+if calc_work_year >= 2020 and calc_work_year <= 2022:
+    # Try to get actual data
+    actual_data = df[
+        (df['work_year'] == calc_work_year) & 
+        (df['job_title'] == calc_job_title) & 
+        (df['experience_level'] == calc_experience) & 
+        (df['employment_type'] == calc_employment) &
+        (df['employee_residence'] == calc_residence) &
+        (df['remote_ratio'] == calc_remote) &
+        (df['company_location'] == calc_location) &
+        (df['company_size'] == calc_size)
+    ]
+    
+    if len(actual_data) > 0:
+        calc_predicted_salary = actual_data['salary_in_usd'].mean()
+        data_source = "Actual Data"
+    else:
+        # Try partial match (job, experience, company size only)
+        partial_data = df[
+            (df['work_year'] == calc_work_year) & 
+            (df['job_title'] == calc_job_title) & 
+            (df['experience_level'] == calc_experience) & 
+            (df['company_size'] == calc_size)
+        ]
+        
+        if len(partial_data) > 0:
+            calc_predicted_salary = partial_data['salary_in_usd'].mean()
+            data_source = "Actual Data (Partial Match)"
+        else:
+            # Use prediction if no match
+            calc_predicted_salary = model.predict(calc_input)[0]
+            data_source = "Predicted"
+else:
+    # Use prediction for 2023-2030
+    calc_predicted_salary = model.predict(calc_input)[0]
+    data_source = "Predicted"
 
 # Display result with styling
 st.markdown("---")
+
+# Show data source badge
+if "Actual" in data_source:
+    st.success(f"✅ {data_source}")
+else:
+    st.info(f"🔮 {data_source}")
+
 result_col1, result_col2, result_col3 = st.columns([1, 2, 1])
 
 with result_col2:
     st.markdown(f"""
     <div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                 padding: 2rem; border-radius: 15px; text-align: center; color: white;'>
-        <h3 style='margin: 0; font-size: 1.2rem;'>Predicted Salary for {calc_work_year}</h3>
+        <h3 style='margin: 0; font-size: 1.2rem;'>{"Actual" if "Actual" in data_source else "Predicted"} Salary for {calc_work_year}</h3>
         <h1 style='margin: 1rem 0; font-size: 3.5rem;'>${calc_predicted_salary:,.0f}</h1>
         <p style='margin: 0; opacity: 0.9;'>{calc_job_title} | {calc_experience} | {calc_size}</p>
     </div>
@@ -98,20 +142,50 @@ st.markdown("---")
 st.subheader("📊 Market Comparison")
 
 # Get market average for the selected job title and year
-market_data = df[(df['job_title'] == calc_job_title) & (df['work_year'] == calc_work_year)]
-if len(market_data) > 0:
-    market_avg = market_data['salary_in_usd'].mean()
-    market_label = f"Market Avg for {calc_job_title} ({calc_work_year})"
+if calc_work_year >= 2020 and calc_work_year <= 2022:
+    # Use actual data for market average
+    market_data = df[(df['job_title'] == calc_job_title) & (df['work_year'] == calc_work_year)]
+    if len(market_data) > 0:
+        market_avg = market_data['salary_in_usd'].mean()
+        market_label = f"Market Avg for {calc_job_title} ({calc_work_year})"
+    else:
+        market_avg = df[df['job_title'] == calc_job_title]['salary_in_usd'].mean()
+        market_label = f"Overall Market Avg for {calc_job_title}"
 else:
-    market_avg = df[df['job_title'] == calc_job_title]['salary_in_usd'].mean()
-    market_label = f"Overall Market Avg for {calc_job_title}"
+    # Predict market average for future years
+    job_data = df[df['job_title'] == calc_job_title]
+    if len(job_data) > 0:
+        # Use most common values for market prediction
+        common_exp = job_data['experience_level'].mode()[0]
+        common_size = job_data['company_size'].mode()[0]
+        common_employment = job_data['employment_type'].mode()[0]
+        common_location = job_data['company_location'].mode()[0]
+        common_residence = job_data['employee_residence'].mode()[0]
+        common_remote = int(job_data['remote_ratio'].median())
+        
+        market_pred_input = pd.DataFrame([{
+            'work_year': calc_work_year,
+            'experience_level': common_exp,
+            'employment_type': common_employment,
+            'job_title': calc_job_title,
+            'employee_residence': common_residence,
+            'remote_ratio': common_remote,
+            'company_location': common_location,
+            'company_size': common_size
+        }])
+        
+        market_avg = model.predict(market_pred_input)[0]
+        market_label = f"Predicted Market Avg ({calc_work_year})"
+    else:
+        market_avg = df[df['job_title'] == calc_job_title]['salary_in_usd'].mean()
+        market_label = f"Overall Market Avg for {calc_job_title}"
 
 diff = calc_predicted_salary - market_avg
 diff_pct = (diff / market_avg) * 100 if market_avg > 0 else 0
 
 comp_col1, comp_col2, comp_col3 = st.columns(3)
 with comp_col1:
-    st.metric("Your Prediction", f"${calc_predicted_salary:,.0f}")
+    st.metric("Your Salary", f"${calc_predicted_salary:,.0f}")
 with comp_col2:
     st.metric(market_label, f"${market_avg:,.0f}")
 with comp_col3:
@@ -148,22 +222,70 @@ if viz_exp_filter:
 
 # Tab 1: Animated Line Chart
 with viz_tab1:
-    st.subheader("💫 Salary Trends Over Time")
+    st.subheader("💫 Salary Trends Over Time (2020-2030)")
     
-    # Group by year and experience level
-    trend_data = df_filtered.groupby(['work_year', 'experience_level'])['salary_in_usd'].agg(['mean', 'count']).reset_index()
-    trend_data.columns = ['work_year', 'experience_level', 'avg_salary', 'count']
+    # Prepare historical data (2020-2022)
+    historical_trend = df_filtered.groupby(['work_year', 'experience_level'])['salary_in_usd'].agg(['mean', 'count']).reset_index()
+    historical_trend.columns = ['work_year', 'experience_level', 'avg_salary', 'count']
+    historical_trend['type'] = 'Actual'
+    
+    # Prepare predicted data (2023-2030)
+    future_years = list(range(2023, 2031))
+    predicted_trends = []
+    
+    for exp_level in df['experience_level'].unique():
+        exp_data = df[df['experience_level'] == exp_level]
+        if len(exp_data) > 0:
+            # Use most common values for this experience level
+            common_job = exp_data['job_title'].mode()[0]
+            common_size = exp_data['company_size'].mode()[0]
+            common_employment = exp_data['employment_type'].mode()[0]
+            common_location = exp_data['company_location'].mode()[0]
+            common_residence = exp_data['employee_residence'].mode()[0]
+            common_remote = int(exp_data['remote_ratio'].median())
+            
+            for year in future_years:
+                pred_input = pd.DataFrame([{
+                    'work_year': year,
+                    'experience_level': exp_level,
+                    'employment_type': common_employment,
+                    'job_title': common_job,
+                    'employee_residence': common_residence,
+                    'remote_ratio': common_remote,
+                    'company_location': common_location,
+                    'company_size': common_size
+                }])
+                
+                pred_salary = model.predict(pred_input)[0]
+                predicted_trends.append({
+                    'work_year': year,
+                    'experience_level': exp_level,
+                    'avg_salary': pred_salary,
+                    'count': 0,
+                    'type': 'Predicted'
+                })
+    
+    predicted_df = pd.DataFrame(predicted_trends)
+    
+    # Combine historical and predicted
+    combined_trend = pd.concat([historical_trend, predicted_df], ignore_index=True)
     
     fig_trend = px.line(
-        trend_data,
+        combined_trend,
         x='work_year',
         y='avg_salary',
         color='experience_level',
+        line_dash='type',
         markers=True,
-        title='Average Salary Trends by Experience Level',
-        labels={'avg_salary': 'Average Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience'},
-        hover_data={'count': True}
+        title='Salary Trends: Actual (2020-2022) vs Predicted (2023-2030)',
+        labels={'avg_salary': 'Average Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience', 'type': 'Data Type'},
+        hover_data={'count': True, 'type': True}
     )
+    
+    # Add vertical line to separate actual from predicted
+    fig_trend.add_vline(x=2022.5, line_dash="dash", line_color="gray", 
+                        annotation_text="Actual | Predicted", 
+                        annotation_position="top")
     
     # Add your prediction
     fig_trend.add_scatter(
@@ -178,17 +300,20 @@ with viz_tab1:
     fig_trend.update_layout(
         height=500,
         hovermode='x unified',
-        xaxis=dict(dtick=1)
+        xaxis=dict(dtick=1, range=[2019.5, 2030.5])
     )
     st.plotly_chart(fig_trend, use_container_width=True)
     
     # Additional stats
     col1, col2, col3 = st.columns(3)
     with col1:
-        growth_2020_2022 = ((df_filtered[df_filtered['work_year']==2022]['salary_in_usd'].mean() - 
-                             df_filtered[df_filtered['work_year']==2020]['salary_in_usd'].mean()) / 
-                             df_filtered[df_filtered['work_year']==2020]['salary_in_usd'].mean() * 100) if len(df_filtered[df_filtered['work_year']==2020]) > 0 else 0
-        st.metric("📈 Growth (2020-2022)", f"{growth_2020_2022:.1f}%")
+        if len(df_filtered[df_filtered['work_year']==2020]) > 0 and len(df_filtered[df_filtered['work_year']==2022]) > 0:
+            growth_2020_2022 = ((df_filtered[df_filtered['work_year']==2022]['salary_in_usd'].mean() - 
+                                 df_filtered[df_filtered['work_year']==2020]['salary_in_usd'].mean()) / 
+                                 df_filtered[df_filtered['work_year']==2020]['salary_in_usd'].mean() * 100)
+            st.metric("📈 Growth (2020-2022)", f"{growth_2020_2022:.1f}%")
+        else:
+            st.metric("📈 Growth (2020-2022)", "N/A")
     with col2:
         st.metric("📊 Records Shown", f"{len(df_filtered):,}")
     with col3:
