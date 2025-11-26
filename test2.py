@@ -125,6 +125,7 @@ st.header("📊 Data Visualization")
 
 # Interactive selection for visualization
 st.sidebar.header("🎨 Visualization Filters")
+viz_type = st.sidebar.radio("Visualization Type", ["Box Plot by Year", "Scatter Plot", "Salary Trends"])
 viz_job_title = st.sidebar.selectbox("Filter by Job Title", ["All"] + sorted(df['job_title'].unique().tolist()))
 
 # Filter data if specific job selected
@@ -133,34 +134,66 @@ if viz_job_title != "All":
 else:
     df_viz = df.copy()
 
-df_viz['Predicted Salary'] = model.predict(X) if viz_job_title == "All" else model.predict(
-    df_viz[['work_year', 'experience_level', 'employment_type', 'job_title', 
-            'employee_residence', 'remote_ratio', 'company_location', 'company_size']]
-)
+if viz_type == "Box Plot by Year":
+    # Box plot shows distribution better
+    fig = px.box(
+        df_viz,
+        x='work_year',
+        y='salary_in_usd',
+        color='experience_level',
+        title=f"Salary Distribution by Year {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
+        labels={'salary_in_usd': 'Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience'},
+        hover_data=['job_title', 'company_size']
+    )
+    fig.update_layout(height=600)
+    
+elif viz_type == "Scatter Plot":
+    # Scatter plot with jitter
+    import numpy as np
+    df_viz_scatter = df_viz.copy()
+    # Add small random jitter to x-axis to prevent overlap
+    df_viz_scatter['work_year_jitter'] = df_viz_scatter['work_year'] + np.random.uniform(-0.2, 0.2, len(df_viz_scatter))
+    
+    fig = px.scatter(
+        df_viz_scatter,
+        x='work_year_jitter',
+        y='salary_in_usd',
+        color='experience_level',
+        size='remote_ratio',
+        hover_data=['experience_level', 'company_size', 'job_title', 'work_year'],
+        title=f"Salary Distribution {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
+        labels={'salary_in_usd': 'Salary (USD)', 'work_year_jitter': 'Year', 'experience_level': 'Experience'},
+        opacity=0.6
+    )
+    fig.update_xaxes(tickmode='linear', tick0=2020, dtick=1)
+    fig.update_layout(height=600)
+    
+else:  # Salary Trends
+    # Line chart showing average trends
+    trend_data = df_viz.groupby(['work_year', 'experience_level'])['salary_in_usd'].mean().reset_index()
+    
+    fig = px.line(
+        trend_data,
+        x='work_year',
+        y='salary_in_usd',
+        color='experience_level',
+        markers=True,
+        title=f"Average Salary Trends by Experience Level {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
+        labels={'salary_in_usd': 'Average Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience'}
+    )
+    fig.update_layout(height=600)
 
-# Create scatter plot
-fig = px.scatter(
-    df_viz,
-    x='work_year',
-    y='salary_in_usd',
-    color='job_title' if viz_job_title == "All" else 'experience_level',
-    size='remote_ratio',
-    hover_data=['experience_level', 'company_size', 'company_location', 'job_title'],
-    title=f"Historical Salaries {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
-    labels={'salary_in_usd': 'Salary (USD)', 'work_year': 'Year'}
-)
+# Add your prediction as a highlighted point (for scatter and trends only)
+if viz_type in ["Scatter Plot", "Salary Trends"]:
+    fig.add_scatter(
+        x=[calc_work_year], 
+        y=[calc_predicted_salary], 
+        mode='markers', 
+        marker=dict(color='red', size=20, symbol='star', line=dict(color='white', width=2)), 
+        name='Your Prediction',
+        hovertemplate=f'<b>Your Prediction</b><br>Year: {calc_work_year}<br>Salary: ${calc_predicted_salary:,.0f}<extra></extra>'
+    )
 
-# Add your prediction as a highlighted point
-fig.add_scatter(
-    x=[calc_work_year], 
-    y=[calc_predicted_salary], 
-    mode='markers', 
-    marker=dict(color='red', size=20, symbol='star', line=dict(color='white', width=2)), 
-    name='Your Prediction',
-    hovertemplate=f'<b>Your Prediction</b><br>Year: {calc_work_year}<br>Salary: ${calc_predicted_salary:,.0f}<extra></extra>'
-)
-
-fig.update_layout(height=600)
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
