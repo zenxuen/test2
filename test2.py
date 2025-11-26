@@ -121,80 +121,234 @@ with comp_col3:
 # Visualization Section
 # ---------------------------------------------------------
 st.markdown("---")
-st.header("📊 Data Visualization")
+st.header("📊 Interactive Data Visualization")
 
-# Interactive selection for visualization
+# Create tabs for different visualizations
+viz_tab1, viz_tab2, viz_tab3, viz_tab4 = st.tabs(["📈 Salary Trends", "🎯 Interactive Scatter", "📊 Distribution", "🔍 Job Comparison"])
+
+# Sidebar filters
 st.sidebar.header("🎨 Visualization Filters")
-viz_type = st.sidebar.radio("Visualization Type", ["Box Plot by Year", "Scatter Plot", "Salary Trends"])
-viz_job_title = st.sidebar.selectbox("Filter by Job Title", ["All"] + sorted(df['job_title'].unique().tolist()))
+viz_job_filter = st.sidebar.multiselect(
+    "Filter by Job Titles", 
+    options=sorted(df['job_title'].unique()),
+    default=[]
+)
+viz_exp_filter = st.sidebar.multiselect(
+    "Filter by Experience Level",
+    options=sorted(df['experience_level'].unique()),
+    default=[]
+)
 
-# Filter data if specific job selected
-if viz_job_title != "All":
-    df_viz = df[df['job_title'] == viz_job_title].copy()
-else:
-    df_viz = df.copy()
+# Apply filters
+df_filtered = df.copy()
+if viz_job_filter:
+    df_filtered = df_filtered[df_filtered['job_title'].isin(viz_job_filter)]
+if viz_exp_filter:
+    df_filtered = df_filtered[df_filtered['experience_level'].isin(viz_exp_filter)]
 
-if viz_type == "Box Plot by Year":
-    # Box plot shows distribution better
-    fig = px.box(
-        df_viz,
-        x='work_year',
-        y='salary_in_usd',
-        color='experience_level',
-        title=f"Salary Distribution by Year {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
-        labels={'salary_in_usd': 'Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience'},
-        hover_data=['job_title', 'company_size']
-    )
-    fig.update_layout(height=600)
+# Tab 1: Animated Line Chart
+with viz_tab1:
+    st.subheader("💫 Salary Trends Over Time")
     
-elif viz_type == "Scatter Plot":
-    # Scatter plot with jitter
-    import numpy as np
-    df_viz_scatter = df_viz.copy()
-    # Add small random jitter to x-axis to prevent overlap
-    df_viz_scatter['work_year_jitter'] = df_viz_scatter['work_year'] + np.random.uniform(-0.2, 0.2, len(df_viz_scatter))
+    # Group by year and experience level
+    trend_data = df_filtered.groupby(['work_year', 'experience_level'])['salary_in_usd'].agg(['mean', 'count']).reset_index()
+    trend_data.columns = ['work_year', 'experience_level', 'avg_salary', 'count']
     
-    fig = px.scatter(
-        df_viz_scatter,
-        x='work_year_jitter',
-        y='salary_in_usd',
-        color='experience_level',
-        size='remote_ratio',
-        hover_data=['experience_level', 'company_size', 'job_title', 'work_year'],
-        title=f"Salary Distribution {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
-        labels={'salary_in_usd': 'Salary (USD)', 'work_year_jitter': 'Year', 'experience_level': 'Experience'},
-        opacity=0.6
-    )
-    fig.update_xaxes(tickmode='linear', tick0=2020, dtick=1)
-    fig.update_layout(height=600)
-    
-else:  # Salary Trends
-    # Line chart showing average trends
-    trend_data = df_viz.groupby(['work_year', 'experience_level'])['salary_in_usd'].mean().reset_index()
-    
-    fig = px.line(
+    fig_trend = px.line(
         trend_data,
         x='work_year',
-        y='salary_in_usd',
+        y='avg_salary',
         color='experience_level',
         markers=True,
-        title=f"Average Salary Trends by Experience Level {f'for {viz_job_title}' if viz_job_title != 'All' else '(All Jobs)'}",
-        labels={'salary_in_usd': 'Average Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience'}
+        title='Average Salary Trends by Experience Level',
+        labels={'avg_salary': 'Average Salary (USD)', 'work_year': 'Year', 'experience_level': 'Experience'},
+        hover_data={'count': True}
     )
-    fig.update_layout(height=600)
-
-# Add your prediction as a highlighted point (for scatter and trends only)
-if viz_type in ["Scatter Plot", "Salary Trends"]:
-    fig.add_scatter(
+    
+    # Add your prediction
+    fig_trend.add_scatter(
         x=[calc_work_year], 
         y=[calc_predicted_salary], 
         mode='markers', 
-        marker=dict(color='red', size=20, symbol='star', line=dict(color='white', width=2)), 
+        marker=dict(color='red', size=20, symbol='star', line=dict(color='white', width=3)), 
         name='Your Prediction',
         hovertemplate=f'<b>Your Prediction</b><br>Year: {calc_work_year}<br>Salary: ${calc_predicted_salary:,.0f}<extra></extra>'
     )
+    
+    fig_trend.update_layout(
+        height=500,
+        hovermode='x unified',
+        xaxis=dict(dtick=1)
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
+    
+    # Additional stats
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        growth_2020_2022 = ((df_filtered[df_filtered['work_year']==2022]['salary_in_usd'].mean() - 
+                             df_filtered[df_filtered['work_year']==2020]['salary_in_usd'].mean()) / 
+                             df_filtered[df_filtered['work_year']==2020]['salary_in_usd'].mean() * 100) if len(df_filtered[df_filtered['work_year']==2020]) > 0 else 0
+        st.metric("📈 Growth (2020-2022)", f"{growth_2020_2022:.1f}%")
+    with col2:
+        st.metric("📊 Records Shown", f"{len(df_filtered):,}")
+    with col3:
+        st.metric("💰 Avg Salary", f"${df_filtered['salary_in_usd'].mean():,.0f}")
 
-st.plotly_chart(fig, use_container_width=True)
+# Tab 2: Interactive Scatter with Animation
+with viz_tab2:
+    st.subheader("🎯 Interactive Salary Explorer")
+    
+    # Add jitter for better visibility
+    import numpy as np
+    df_scatter = df_filtered.copy()
+    df_scatter['work_year_jitter'] = df_scatter['work_year'] + np.random.uniform(-0.15, 0.15, len(df_scatter))
+    
+    # Color by selector
+    color_by = st.selectbox("Color by:", ['experience_level', 'company_size', 'job_title'], key='color_scatter')
+    size_by = st.selectbox("Size by:", ['remote_ratio', 'salary_in_usd'], key='size_scatter')
+    
+    fig_scatter = px.scatter(
+        df_scatter,
+        x='work_year_jitter',
+        y='salary_in_usd',
+        color=color_by,
+        size=size_by,
+        hover_data=['job_title', 'experience_level', 'company_size', 'remote_ratio', 'work_year'],
+        title='Salary Distribution with Custom Dimensions',
+        labels={'salary_in_usd': 'Salary (USD)', 'work_year_jitter': 'Year'},
+        opacity=0.7
+    )
+    
+    # Add your prediction
+    fig_scatter.add_scatter(
+        x=[calc_work_year], 
+        y=[calc_predicted_salary], 
+        mode='markers', 
+        marker=dict(color='red', size=25, symbol='star', line=dict(color='white', width=3)), 
+        name='Your Prediction',
+        hovertemplate=f'<b>Your Prediction</b><br>Year: {calc_work_year}<br>Salary: ${calc_predicted_salary:,.0f}<extra></extra>'
+    )
+    
+    fig_scatter.update_xaxes(tickmode='linear', tick0=2020, dtick=1)
+    fig_scatter.update_layout(height=500, hovermode='closest')
+    st.plotly_chart(fig_scatter, use_container_width=True)
+
+# Tab 3: Box Plot Distribution
+with viz_tab3:
+    st.subheader("📊 Salary Distribution Analysis")
+    
+    dist_view = st.radio("View by:", ['Year', 'Experience Level', 'Company Size'], horizontal=True)
+    
+    if dist_view == 'Year':
+        fig_box = px.box(
+            df_filtered,
+            x='work_year',
+            y='salary_in_usd',
+            color='experience_level',
+            title='Salary Distribution by Year and Experience',
+            labels={'salary_in_usd': 'Salary (USD)', 'work_year': 'Year'}
+        )
+    elif dist_view == 'Experience Level':
+        fig_box = px.box(
+            df_filtered,
+            x='experience_level',
+            y='salary_in_usd',
+            color='experience_level',
+            title='Salary Distribution by Experience Level',
+            labels={'salary_in_usd': 'Salary (USD)', 'experience_level': 'Experience'}
+        )
+    else:
+        fig_box = px.box(
+            df_filtered,
+            x='company_size',
+            y='salary_in_usd',
+            color='company_size',
+            title='Salary Distribution by Company Size',
+            labels={'salary_in_usd': 'Salary (USD)', 'company_size': 'Company Size'}
+        )
+    
+    fig_box.update_layout(height=500, showlegend=True)
+    st.plotly_chart(fig_box, use_container_width=True)
+    
+    # Violin plot option
+    show_violin = st.checkbox("Show Violin Plot (shows density)", value=False)
+    if show_violin:
+        fig_violin = px.violin(
+            df_filtered,
+            x='experience_level',
+            y='salary_in_usd',
+            color='experience_level',
+            box=True,
+            title='Salary Density Distribution by Experience Level',
+            labels={'salary_in_usd': 'Salary (USD)', 'experience_level': 'Experience'}
+        )
+        fig_violin.update_layout(height=500)
+        st.plotly_chart(fig_violin, use_container_width=True)
+
+# Tab 4: Job Comparison
+with viz_tab4:
+    st.subheader("🔍 Compare Job Titles")
+    
+    # Select jobs to compare
+    compare_jobs = st.multiselect(
+        "Select up to 5 jobs to compare:",
+        options=sorted(df['job_title'].unique()),
+        default=sorted(df.groupby('job_title')['salary_in_usd'].mean().nlargest(3).index.tolist())[:3],
+        max_selections=5
+    )
+    
+    if compare_jobs:
+        df_compare = df[df['job_title'].isin(compare_jobs)]
+        
+        # Create comparison charts
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Average salary comparison
+            avg_by_job = df_compare.groupby('job_title')['salary_in_usd'].mean().sort_values(ascending=True).reset_index()
+            fig_compare = px.bar(
+                avg_by_job,
+                x='salary_in_usd',
+                y='job_title',
+                orientation='h',
+                title='Average Salary Comparison',
+                labels={'salary_in_usd': 'Average Salary (USD)', 'job_title': 'Job Title'},
+                color='salary_in_usd',
+                color_continuous_scale='Viridis'
+            )
+            fig_compare.update_layout(showlegend=False, height=400)
+            st.plotly_chart(fig_compare, use_container_width=True)
+        
+        with col2:
+            # Salary over time
+            job_trends = df_compare.groupby(['work_year', 'job_title'])['salary_in_usd'].mean().reset_index()
+            fig_job_trend = px.line(
+                job_trends,
+                x='work_year',
+                y='salary_in_usd',
+                color='job_title',
+                markers=True,
+                title='Salary Trends Over Time',
+                labels={'salary_in_usd': 'Average Salary (USD)', 'work_year': 'Year'}
+            )
+            fig_job_trend.update_layout(height=400, xaxis=dict(dtick=1))
+            st.plotly_chart(fig_job_trend, use_container_width=True)
+        
+        # Statistical comparison table
+        st.markdown("### 📊 Statistical Comparison")
+        stats_df = df_compare.groupby('job_title')['salary_in_usd'].agg([
+            ('Count', 'count'),
+            ('Mean', 'mean'),
+            ('Median', 'median'),
+            ('Min', 'min'),
+            ('Max', 'max'),
+            ('Std Dev', 'std')
+        ]).round(0)
+        
+        st.dataframe(stats_df.style.format('${:,.0f}', subset=['Mean', 'Median', 'Min', 'Max', 'Std Dev']), use_container_width=True)
+    else:
+        st.info("👆 Select job titles above to compare")
+
 
 # ---------------------------------------------------------
 # Additional Statistics
