@@ -212,7 +212,7 @@ def calculate_growth_rate(data, job, exp, size):
 # Get mean prediction from similar profiles
 # ---------------------------------------------------------
 @st.cache_data
-def get_mean_prediction_from_similar(data, year, job, exp, _model):
+def get_mean_prediction_from_similar(data, job, exp):
     """
     If a profile has only 1 year of data, predict based on AVERAGE GROWTH RATE of similar profiles
     """
@@ -232,7 +232,7 @@ def get_mean_prediction_from_similar(data, year, job, exp, _model):
     
     if len(similar_profiles) == 0:
         # No similar profiles at all
-        return None, 0.05
+        return None, 0
     
     # Calculate AVERAGE GROWTH RATE from all similar profiles that have 2+ years
     growth_rates = []
@@ -354,7 +354,7 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     
     # If only 1 year of data, use AVERAGE GROWTH RATE from similar profiles
     if unique_years == 1:
-        result = get_mean_prediction_from_similar(df, year, job, exp, selected_model)
+        result = get_mean_prediction_from_similar(df, job, exp)
         
         if result is not None and len(result) == 2:
             avg_growth, num_profiles = result
@@ -465,7 +465,7 @@ with tab1:
         unique_years = profile_history["work_year"].nunique()
         
         if unique_years == 1:
-            result = get_mean_prediction_from_similar(df, custom_job, custom_exp, selected_model)
+            result = get_mean_prediction_from_similar(df, custom_job, custom_exp)
             year_available = profile_history['work_year'].iloc[0]
             
             if result is not None and len(result) == 2:
