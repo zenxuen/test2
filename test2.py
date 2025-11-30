@@ -354,9 +354,11 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     
     # If only 1 year of data, use AVERAGE GROWTH RATE from similar profiles
     if unique_years == 1:
-        avg_growth, num_profiles = get_mean_prediction_from_similar(df, year, job, exp, selected_model)
+        result = get_mean_prediction_from_similar(df, year, job, exp, selected_model)
         
-        if avg_growth is not None:
+        if result is not None and len(result) == 2:
+            avg_growth, num_profiles = result
+            
             # Get the single year's salary
             base_salary = profile_history["salary_in_usd"].mean()
             base_year = profile_history["work_year"].iloc[0]
@@ -463,13 +465,18 @@ with tab1:
         unique_years = profile_history["work_year"].nunique()
         
         if unique_years == 1:
-            avg_growth, num_profiles = get_mean_prediction_from_similar(df, custom_job, custom_exp, selected_model)
+            result = get_mean_prediction_from_similar(df, custom_job, custom_exp, selected_model)
             year_available = profile_history['work_year'].iloc[0]
             
-            if avg_growth < 0:
-                st.warning(f"⚠️ This profile has only **1 year** of data ({year_available}). Using **average growth from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year** (declining)")
+            if result is not None and len(result) == 2:
+                avg_growth, num_profiles = result
+                
+                if avg_growth < 0:
+                    st.warning(f"⚠️ This profile has only **1 year** of data ({year_available}). Using **average growth from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year** (declining)")
+                else:
+                    st.info(f"ℹ️ This profile has only **1 year** of data ({year_available}). Using **average growth from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year**")
             else:
-                st.info(f"ℹ️ This profile has only **1 year** of data ({year_available}). Using **average growth from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year**")
+                st.warning(f"⚠️ This profile has only **1 year** of data ({year_available}). No similar profiles found for comparison.")
         elif unique_years >= 2:
             growth_rate, growth_source = calculate_growth_rate(df, custom_job, custom_exp, custom_size)
             years_list = sorted(profile_history['work_year'].unique())
