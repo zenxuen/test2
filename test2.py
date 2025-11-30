@@ -260,8 +260,10 @@ def get_mean_prediction_from_similar(data, year, job, exp, _model):
 def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     """
     Get salary with multiple prediction methods
-    - For profiles with only 1 year: Use mean of similar profiles' predictions
+    - Years 2020-2022: Use ACTUAL data if exists
+    - Years 2023-2030: ALWAYS use predictions
     """
+    # ONLY try actual data for years 2020-2022
     if year >= 2020 and year <= 2022:
         # USE ACTUAL DATA
         actual = df[
@@ -273,25 +275,31 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
         
         if len(actual) > 0:
             return actual["salary_in_usd"].mean(), "Actual"
-        else:
-            actual_partial = df[
-                (df["work_year"] == year) & 
-                (df["job_title"] == job) & 
-                (df["experience_level"] == exp)
-            ]
-            
-            if len(actual_partial) > 0:
-                return actual_partial["salary_in_usd"].mean(), "Actual (Partial)"
-            else:
-                actual_job = df[
-                    (df["work_year"] == year) & 
-                    (df["job_title"] == job)
-                ]
-                
-                if len(actual_job) > 0:
-                    return actual_job["salary_in_usd"].mean(), "Actual (Job Only)"
+        
+        # Try partial match (without company size)
+        actual_partial = df[
+            (df["work_year"] == year) & 
+            (df["job_title"] == job) & 
+            (df["experience_level"] == exp)
+        ]
+        
+        if len(actual_partial) > 0:
+            return actual_partial["salary_in_usd"].mean(), "Actual (Partial)"
+        
+        # Try job only
+        actual_job = df[
+            (df["work_year"] == year) & 
+            (df["job_title"] == job)
+        ]
+        
+        if len(actual_job) > 0:
+            return actual_job["salary_in_usd"].mean(), "Actual (Job Only)"
+        
+        # If no actual data found for 2020-2022, fall through to prediction
     
-    # PREDICTIONS for 2023-2030 (or 2020-2022 if no actual data exists)
+    # ========================================
+    # PREDICTIONS (for 2023-2030 OR if no actual data for 2020-2022)
+    # ========================================
     
     # Get profile history
     profile_history = df[
@@ -333,8 +341,7 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
         mean_pred = get_mean_prediction_from_similar(df, year, job, exp, selected_model)
         
         if mean_pred is not None and mean_pred > 0:
-            return mean_pred, "Predicted (Mean of Similar)"
-        # If that fails, continue to other methods
+            return mean_pred, "Predicted (Similar)"
     
     # Method 1: Growth-Based (Most Realistic)
     if method == "Growth-Based (Recommended)":
@@ -351,7 +358,7 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
             years_ahead = year - base_year
             predicted_salary = base_salary * ((1 + growth_rate) ** years_ahead)
             
-            return max(0, predicted_salary), f"Predicted ({growth_source})"
+            return max(0, predicted_salary), "Predicted"
     
     # Method 2: Pure ML Model
     elif method == "Pure ML Model":
@@ -467,19 +474,20 @@ with tab1:
     predicted_count = len(forecast_df[forecast_df["Source"] == "Predicted"])
     
     # Show data breakdown - only show actual years that are actually actual
-    actual_years = forecast_df[forecast_df["Source"].str.contains("Actual", na=False)]["Year"].tolist()
-    # Predicted years should be 2023+ or any year without actual data
-    predicted_years = [y for y in forecast_df["Year"].tolist() if y not in actual_years and y >= 2020]
+    actual_years = [y for y in forecast_df[forecast_df["Source"].str.contains("Actual", na=False)]["Year"].tolist() if y <= 2022]
+    # Predicted years are everything else
+    all_years_in_forecast = forecast_df["Year"].tolist()
+    predicted_years = [y for y in all_years_in_forecast if y not in actual_years]
     
     col_info1, col_info2 = st.columns(2)
     with col_info1:
         if actual_years:
-            st.success(f"✅ **Actual Data ({actual_count} years):** {', '.join(map(str, actual_years))}")
+            st.success(f"✅ **Actual Data ({len(actual_years)} years):** {', '.join(map(str, actual_years))}")
         else:
-            st.warning("⚠️ No actual data found for this combination")
+            st.warning("⚠️ No actual data found for this exact profile")
     with col_info2:
         if predicted_years:
-            st.info(f"🔮 **Predicted Data ({predicted_count} years):** {', '.join(map(str, predicted_years))}")
+            st.info(f"🔮 **Predicted Data ({len(predicted_years)} years):** {', '.join(map(str, predicted_years[:5]))}{', ...' if len(predicted_years) > 5 else ''}")
         else:
             st.warning("⚠️ No predictions generated")
     
