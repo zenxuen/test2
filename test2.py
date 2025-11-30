@@ -214,7 +214,7 @@ def calculate_growth_rate(data, job, exp, size):
 @st.cache_data
 def get_mean_prediction_from_similar(data, year, job, exp, _model):
     """
-    If a profile has only 1 year of data, predict based on mean of similar profiles
+    If a profile has only 1 year of data, predict based on AVERAGE GROWTH RATE of similar profiles
     """
     # Get all profiles with the same job and experience (ignore company size)
     similar_profiles = data[
@@ -232,27 +232,43 @@ def get_mean_prediction_from_similar(data, year, job, exp, _model):
     
     if len(similar_profiles) == 0:
         # No similar profiles at all
-        return None
+        return None, 0.05
     
-    # Get the latest year's average salary for this profile
-    latest_year = similar_profiles['work_year'].max()
-    base_salary = similar_profiles[similar_profiles['work_year'] == latest_year]['salary_in_usd'].mean()
+    # Calculate AVERAGE GROWTH RATE from all similar profiles that have 2+ years
+    growth_rates = []
     
-    # Calculate growth rate from similar profiles
-    yearly_avg = similar_profiles.groupby('work_year')['salary_in_usd'].mean()
-    if len(yearly_avg) >= 2:
-        years = yearly_avg.index.values
-        salaries = yearly_avg.values
-        growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-        growth = max(0.03, min(growth, 0.15))  # Cap between 3-15%
+    # Get unique combinations of company sizes for this job+exp
+    for size in similar_profiles['company_size'].unique():
+        profile_data = data[
+            (data["job_title"] == job) & 
+            (data["experience_level"] == exp) & 
+            (data["company_size"] == size)
+        ].groupby("work_year")["salary_in_usd"].mean()
+        
+        # Only include profiles with 2+ years
+        if len(profile_data) >= 2:
+            years = profile_data.index.values
+            salaries = profile_data.values
+            growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+            # Cap extreme values
+            growth = max(-0.20, min(growth, 0.20))
+            growth_rates.append(growth)
+    
+    # Calculate average growth rate
+    if len(growth_rates) > 0:
+        avg_growth = np.mean(growth_rates)
     else:
-        growth = 0.05  # Default 5%
+        # No multi-year profiles, use overall job/exp growth
+        yearly_avg = similar_profiles.groupby('work_year')['salary_in_usd'].mean()
+        if len(yearly_avg) >= 2:
+            years = yearly_avg.index.values
+            salaries = yearly_avg.values
+            avg_growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+            avg_growth = max(-0.15, min(avg_growth, 0.15))
+        else:
+            avg_growth = 0.05  # Default
     
-    # Project from latest year
-    years_ahead = year - latest_year
-    predicted = base_salary * ((1 + growth) ** years_ahead)
-    
-    return max(0, predicted)  # Ensure non-negative
+    return avg_growth, len(growth_rates)
 
 # ---------------------------------------------------------
 # Prediction Function with Multiple Methods
@@ -336,12 +352,20 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     
     unique_years = profile_history["work_year"].nunique()
     
-    # If only 1 year of data, use mean of similar profiles
+    # If only 1 year of data, use AVERAGE GROWTH RATE from similar profiles
     if unique_years == 1:
-        mean_pred = get_mean_prediction_from_similar(df, year, job, exp, selected_model)
+        avg_growth, num_profiles = get_mean_prediction_from_similar(df, year, job, exp, selected_model)
         
-        if mean_pred is not None and mean_pred > 0:
-            return mean_pred, "Predicted (Similar)"
+        if avg_growth is not None:
+            # Get the single year's salary
+            base_salary = profile_history["salary_in_usd"].mean()
+            base_year = profile_history["work_year"].iloc[0]
+            
+            # Apply average growth rate
+            years_ahead = year - base_year
+            predicted_salary = base_salary * ((1 + avg_growth) ** years_ahead)
+            
+            return max(0, predicted_salary), f"Predicted (Avg of {num_profiles} similar)"
     
     # Method 1: Growth-Based (Most Realistic)
     if method == "Growth-Based (Recommended)":
@@ -439,11 +463,22 @@ with tab1:
         unique_years = profile_history["work_year"].nunique()
         
         if unique_years == 1:
-            st.warning(f"⚠️ This profile has only **1 year** of data ({profile_history['work_year'].iloc[0]}). Predictions use **mean of similar profiles** (same job + experience).")
+            avg_growth, num_profiles = get_mean_prediction_from_similar(df, custom_job, custom_exp, selected_model)
+            year_available = profile_history['work_year'].iloc[0]
+            
+            if avg_growth < 0:
+                st.warning(f"⚠️ This profile has only **1 year** of data ({year_available}). Using **average growth from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year** (declining)")
+            else:
+                st.info(f"ℹ️ This profile has only **1 year** of data ({year_available}). Using **average growth from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year**")
         elif unique_years >= 2:
             growth_rate, growth_source = calculate_growth_rate(df, custom_job, custom_exp, custom_size)
             years_list = sorted(profile_history['work_year'].unique())
-            st.success(f"✅ This profile has **{unique_years} years** of data ({', '.join(map(str, years_list))}). Using **its own growth pattern**: **{growth_rate*100:.1f}% per year**")
+            
+            # Show different message for negative vs positive growth
+            if growth_rate < 0:
+                st.warning(f"📉 This profile has **{unique_years} years** of data ({', '.join(map(str, years_list))}). **Declining pattern**: **{growth_rate*100:.1f}% per year** (salaries decreasing)")
+            else:
+                st.success(f"✅ This profile has **{unique_years} years** of data ({', '.join(map(str, years_list))}). Using **its own growth pattern**: **{growth_rate*100:.1f}% per year**")
         else:
             st.info(f"ℹ️ No historical data for this exact profile. Using fallback prediction methods.")
     
