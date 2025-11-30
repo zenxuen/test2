@@ -255,7 +255,23 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
             years_ahead = year - base_year
             predicted_salary = base_salary_2022 * ((1 + growth_rate) ** years_ahead)
             
-            return predicted_salary, f"Predicted (Growth: {growth_rate*100:.1f}%/yr)"
+            return predicted_salary, "Predicted"
+        else:
+            # No exact match, try with just job and experience
+            fallback_data = df[
+                (df["job_title"] == job) & 
+                (df["experience_level"] == exp)
+            ]
+            if len(fallback_data) > 0:
+                last_year_data = fallback_data[fallback_data["work_year"] == fallback_data["work_year"].max()]
+                base_salary_2022 = last_year_data["salary_in_usd"].mean()
+                base_year = last_year_data["work_year"].iloc[0]
+                
+                growth_rate = calculate_growth_rate(df, job, exp, size)
+                years_ahead = year - base_year
+                predicted_salary = base_salary_2022 * ((1 + growth_rate) ** years_ahead)
+                
+                return predicted_salary, "Predicted"
     
     # Method 2: Pure ML Model
     elif method == "Pure ML Model":
@@ -266,7 +282,7 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
             "company_size": [size]
         })
         predicted_salary = selected_model.predict(pred_input)[0]
-        return predicted_salary, "Predicted (ML Only)"
+        return predicted_salary, "Predicted"
     
     # Method 3: Hybrid (Blend of both)
     else:  # Hybrid
@@ -297,7 +313,7 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
             
             # Blend: 70% growth-based, 30% ML
             blended = 0.7 * growth_prediction + 0.3 * ml_prediction
-            return blended, "Predicted (Hybrid)"
+            return blended, "Predicted"
         else:
             # Fall back to ML only
             pred_input = pd.DataFrame({
@@ -307,7 +323,17 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
                 "company_size": [size]
             })
             predicted_salary = selected_model.predict(pred_input)[0]
-            return predicted_salary, "Predicted (ML Only)"
+            return predicted_salary, "Predicted"
+    
+    # Fallback if nothing worked
+    pred_input = pd.DataFrame({
+        "work_year": [year],
+        "job_title": [job],
+        "experience_level": [exp],
+        "company_size": [size]
+    })
+    predicted_salary = selected_model.predict(pred_input)[0]
+    return predicted_salary, "Predicted"
 
 # ---------------------------------------------------------
 # Main Content - Tabs
@@ -350,15 +376,25 @@ with tab1:
     
     forecast_df = pd.DataFrame(forecast_data)
     
+    # Debug: Show what data we have
+    actual_count = len(forecast_df[forecast_df["Source"].str.contains("Actual", na=False)])
+    predicted_count = len(forecast_df[forecast_df["Source"] == "Predicted"])
+    
     # Show data breakdown
-    actual_years = forecast_df[forecast_df["Source"].str.contains("Actual")]["Year"].tolist()
+    actual_years = forecast_df[forecast_df["Source"].str.contains("Actual", na=False)]["Year"].tolist()
     predicted_years = forecast_df[forecast_df["Source"] == "Predicted"]["Year"].tolist()
     
     col_info1, col_info2 = st.columns(2)
     with col_info1:
-        st.success(f"✅ **Actual Data:** {', '.join(map(str, actual_years)) if actual_years else 'None'}")
+        if actual_years:
+            st.success(f"✅ **Actual Data ({actual_count} years):** {', '.join(map(str, actual_years))}")
+        else:
+            st.warning("⚠️ No actual data found for this combination")
     with col_info2:
-        st.info(f"🔮 **Predicted Data:** {', '.join(map(str, predicted_years)) if predicted_years else 'None'}")
+        if predicted_years:
+            st.info(f"🔮 **Predicted Data ({predicted_count} years):** {', '.join(map(str, predicted_years))}")
+        else:
+            st.warning("⚠️ No predictions generated")
     
     # Calculate metrics
     start_salary = forecast_df.iloc[0]['Salary (USD)']
@@ -378,7 +414,7 @@ with tab1:
     fig = go.Figure()
     
     # Plot Actual Data (2020-2022)
-    actual_df = forecast_df[forecast_df["Source"].str.contains("Actual")]
+    actual_df = forecast_df[forecast_df["Source"].str.contains("Actual", na=False)]
     if len(actual_df) > 0:
         fig.add_trace(go.Scatter(
             x=actual_df["Year"],
@@ -406,16 +442,19 @@ with tab1:
             fillcolor='rgba(102, 126, 234, 0.15)',
             hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> Predicted<extra></extra>'
         ))
+    else:
+        st.warning("⚠️ No predicted data to display. Check if there's historical data for this profile.")
     
-    # Add vertical separator
-    fig.add_vline(
-        x=2022.5, 
-        line_dash="dot", 
-        line_color="red", 
-        line_width=2,
-        annotation_text="Actual | Predictions", 
-        annotation_position="top"
-    )
+    # Add vertical separator only if we have both actual and predicted
+    if len(actual_df) > 0 and len(predicted_df) > 0:
+        fig.add_vline(
+            x=2022.5, 
+            line_dash="dot", 
+            line_color="red", 
+            line_width=2,
+            annotation_text="Actual | Predictions", 
+            annotation_position="top"
+        )
     
     fig.update_layout(
         title=dict(
