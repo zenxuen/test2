@@ -5,7 +5,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.pipeline import Pipeline
 import plotly.express as px
@@ -20,7 +20,7 @@ st.set_page_config(
     page_icon="💼"
 )
 
-# Custom CSS for better styling
+# Custom CSS
 st.markdown("""
     <style>
     .main-header {
@@ -38,11 +38,18 @@ st.markdown("""
         color: white;
         text-align: center;
     }
+    .warning-box {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<h1 class="main-header">💼 Cybersecurity Salary Prediction Dashboard</h1>', unsafe_allow_html=True)
-st.markdown("*Predict salaries with advanced ML models and interactive visualizations*")
+st.markdown("*Predict salaries with advanced ML models - Target: Salary | Predictors: Year, Job, Experience, Company Size*")
 
 # ---------------------------------------------------------
 # Load Dataset
@@ -55,6 +62,23 @@ def load_data():
 df = load_data()
 
 # ---------------------------------------------------------
+# Feature Engineering: Add salary growth trends
+# ---------------------------------------------------------
+@st.cache_data
+def add_features(data):
+    df_enhanced = data.copy()
+    
+    # Calculate average salary growth rate per job/experience combination
+    df_enhanced['years_since_2020'] = df_enhanced['work_year'] - 2020
+    
+    # Add interaction features
+    df_enhanced['exp_size_combo'] = df_enhanced['experience_level'] + '_' + df_enhanced['company_size']
+    
+    return df_enhanced
+
+df_enhanced = add_features(df)
+
+# ---------------------------------------------------------
 # Sidebar - Model Selection & Info
 # ---------------------------------------------------------
 st.sidebar.header("🎛️ Model Configuration")
@@ -64,6 +88,13 @@ model_type = st.sidebar.selectbox(
     help="Choose the prediction algorithm"
 )
 
+# Add prediction method selector
+prediction_method = st.sidebar.radio(
+    "Prediction Method for Future Years",
+    ["ML Model Only", "ML Model + Growth Rate", "Conservative (Actual Data Priority)"],
+    help="How to handle predictions for years beyond training data"
+)
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 Dataset Info")
 st.sidebar.info(f"""
@@ -71,31 +102,36 @@ st.sidebar.info(f"""
 - **Date Range:** {df['work_year'].min()} - {df['work_year'].max()}
 - **Job Titles:** {df['job_title'].nunique()}
 - **Avg Salary:** ${df['salary_in_usd'].mean():,.0f}
+- **Salary Range:** ${df['salary_in_usd'].min():,.0f} - ${df['salary_in_usd'].max():,.0f}
 """)
 
-# Show current model being used
 st.sidebar.success(f"**Active Model:** {model_type}")
 
 # ---------------------------------------------------------
-# Train Models with Performance Metrics
+# Train Models with Enhanced Features
 # ---------------------------------------------------------
 @st.cache_resource
 def train_models(data):
-    X = data[["work_year", "job_title", "experience_level", "company_size"]]
+    # Use enhanced features
+    X = data[["work_year", "job_title", "experience_level", "company_size", "years_since_2020"]]
     y = data["salary_in_usd"]
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     categorical_cols = ["job_title", "experience_level", "company_size"]
+    numeric_cols = ["work_year", "years_since_2020"]
+    
     preprocessor = ColumnTransformer(
-        transformers=[("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)],
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
+        ],
         remainder="passthrough"
     )
     
     models = {
         "Linear Regression": LinearRegression(),
-        "Random Forest": RandomForestRegressor(n_estimators=100, random_state=42, max_depth=10),
-        "Gradient Boosting": GradientBoostingRegressor(n_estimators=100, random_state=42, max_depth=5)
+        "Random Forest": RandomForestRegressor(n_estimators=200, random_state=42, max_depth=15, min_samples_split=5),
+        "Gradient Boosting": GradientBoostingRegressor(n_estimators=200, random_state=42, max_depth=7, learning_rate=0.1)
     }
     
     trained_models = {}
@@ -110,31 +146,127 @@ def train_models(data):
         
         y_pred = pipeline.predict(X_test)
         
+        # Cross-validation score
+        cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='r2')
+        
         trained_models[name] = pipeline
         metrics[name] = {
             "R² Score": r2_score(y_test, y_pred),
             "MAE": mean_absolute_error(y_test, y_pred),
-            "RMSE": np.sqrt(mean_squared_error(y_test, y_pred))
+            "RMSE": np.sqrt(mean_squared_error(y_test, y_pred)),
+            "CV R² Mean": cv_scores.mean(),
+            "CV R² Std": cv_scores.std()
         }
     
     return trained_models, metrics
 
-models, performance_metrics = train_models(df)
+models, performance_metrics = train_models(df_enhanced)
 selected_model = models[model_type]
+
+# Calculate historical growth rate
+@st.cache_data
+def calculate_growth_rates(data):
+    growth_rates = {}
+    
+    for job in data['job_title'].unique():
+        job_data = data[data['job_title'] == job].groupby('work_year')['salary_in_usd'].mean()
+        
+        if len(job_data) >= 2:
+            # Calculate year-over-year growth
+            years = job_data.index.values
+            salaries = job_data.values
+            
+            if len(years) > 1:
+                # Simple linear growth rate
+                growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+                growth_rates[job] = max(0.02, min(growth, 0.15))  # Cap between 2% and 15%
+            else:
+                growth_rates[job] = 0.05  # Default 5%
+        else:
+            growth_rates[job] = 0.05
+    
+    return growth_rates
+
+growth_rates = calculate_growth_rates(df)
 
 # ---------------------------------------------------------
 # Display Model Performance
 # ---------------------------------------------------------
-with st.sidebar.expander("📈 Model Performance"):
+with st.sidebar.expander("📈 Model Performance", expanded=True):
     perf = performance_metrics[model_type]
     st.metric("R² Score", f"{perf['R² Score']:.3f}")
     st.metric("MAE", f"${perf['MAE']:,.0f}")
     st.metric("RMSE", f"${perf['RMSE']:,.0f}")
+    st.metric("CV R² (Mean±Std)", f"{perf['CV R² Mean']:.3f}±{perf['CV R² Std']:.3f}")
+
+# ---------------------------------------------------------
+# Prediction Function with Multiple Methods
+# ---------------------------------------------------------
+def predict_salary(year, job, exp, size, method="ML Model Only"):
+    years_since = year - 2020
+    
+    pred_input = pd.DataFrame({
+        "work_year": [year],
+        "job_title": [job],
+        "experience_level": [exp],
+        "company_size": [size],
+        "years_since_2020": [years_since]
+    })
+    
+    base_prediction = selected_model.predict(pred_input)[0]
+    
+    if method == "ML Model Only":
+        return base_prediction
+    
+    elif method == "ML Model + Growth Rate":
+        # Get base salary from 2022 (last training year)
+        base_year_input = pd.DataFrame({
+            "work_year": [2022],
+            "job_title": [job],
+            "experience_level": [exp],
+            "company_size": [size],
+            "years_since_2020": [2]
+        })
+        base_salary = selected_model.predict(base_year_input)[0]
+        
+        # Apply growth rate
+        years_ahead = year - 2022
+        growth_rate = growth_rates.get(job, 0.05)
+        adjusted_salary = base_salary * ((1 + growth_rate) ** years_ahead)
+        
+        # Blend ML prediction with growth-adjusted prediction
+        return 0.6 * base_prediction + 0.4 * adjusted_salary
+    
+    elif method == "Conservative (Actual Data Priority)":
+        # For years in training data, try to get actual
+        if year <= 2022:
+            actual = df[(df['work_year'] == year) & 
+                       (df['job_title'] == job) & 
+                       (df['experience_level'] == exp) & 
+                       (df['company_size'] == size)]
+            
+            if len(actual) > 0:
+                return actual['salary_in_usd'].mean()
+        
+        # Otherwise use ML + growth
+        base_year_input = pd.DataFrame({
+            "work_year": [2022],
+            "job_title": [job],
+            "experience_level": [exp],
+            "company_size": [size],
+            "years_since_2020": [2]
+        })
+        base_salary = selected_model.predict(base_year_input)[0]
+        years_ahead = year - 2022
+        growth_rate = growth_rates.get(job, 0.05)
+        return base_salary * ((1 + growth_rate) ** years_ahead)
+    
+    return base_prediction
 
 # ---------------------------------------------------------
 # Main Content - Tabs
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["🔮 Salary Forecast", "📊 Data Analysis", "💰 Salary Calculator", "🗺️ Insights"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔮 Salary Forecast", "📊 Data Analysis", "💰 Salary Calculator", "🗺️ Model Insights"])
 
 # ---------------------------------------------------------
 # TAB 1: Salary Forecast
@@ -151,63 +283,25 @@ with tab1:
     with col3:
         custom_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
     
-    # Forecast 2020–2030 (actual data 2020-2022, predictions 2023-2030)
+    # Show growth rate for selected job
+    job_growth = growth_rates.get(custom_job, 0.05) * 100
+    st.info(f"📊 Historical growth rate for **{custom_job}**: ~{job_growth:.1f}% per year")
+    
+    # Forecast 2020–2030
     all_forecast_years = np.arange(2020, 2031)
     forecast_data = []
     
     for year in all_forecast_years:
+        salary = predict_salary(year, custom_job, custom_exp, custom_size, prediction_method)
+        
+        # Determine data source
         if year <= 2022:
-            # Try to get actual data with exact match
-            actual_data = df[
-                (df["work_year"] == year) & 
-                (df["job_title"] == custom_job) & 
-                (df["experience_level"] == custom_exp) & 
-                (df["company_size"] == custom_size)
-            ]
-            
-            if len(actual_data) > 0:
-                salary = actual_data["salary_in_usd"].mean()
-                data_source = "Actual"
-            else:
-                # Try without company size
-                actual_data_partial = df[
-                    (df["work_year"] == year) & 
-                    (df["job_title"] == custom_job) & 
-                    (df["experience_level"] == custom_exp)
-                ]
-                
-                if len(actual_data_partial) > 0:
-                    salary = actual_data_partial["salary_in_usd"].mean()
-                    data_source = "Actual (Partial Match)"
-                else:
-                    # Try with just job title
-                    actual_data_job = df[
-                        (df["work_year"] == year) & 
-                        (df["job_title"] == custom_job)
-                    ]
-                    
-                    if len(actual_data_job) > 0:
-                        salary = actual_data_job["salary_in_usd"].mean()
-                        data_source = "Actual (Job Only)"
-                    else:
-                        # Use prediction if no match at all
-                        pred_input = pd.DataFrame({
-                            "work_year": [year],
-                            "job_title": [custom_job],
-                            "experience_level": [custom_exp],
-                            "company_size": [custom_size]
-                        })
-                        salary = selected_model.predict(pred_input)[0]
-                        data_source = "Predicted"
+            actual = df[(df['work_year'] == year) & 
+                       (df['job_title'] == custom_job) & 
+                       (df['experience_level'] == custom_exp) & 
+                       (df['company_size'] == custom_size)]
+            data_source = "Actual" if len(actual) > 0 else "Predicted"
         else:
-            # Predict for 2023-2030
-            pred_input = pd.DataFrame({
-                "work_year": [year],
-                "job_title": [custom_job],
-                "experience_level": [custom_exp],
-                "company_size": [custom_size]
-            })
-            salary = selected_model.predict(pred_input)[0]
             data_source = "Predicted"
         
         forecast_data.append({
@@ -218,18 +312,9 @@ with tab1:
     
     forecast_df = pd.DataFrame(forecast_data)
     
-    # Display data source information
-    st.info(f"""
-    **Data Sources Used:**
-    - Years with Actual Data: {', '.join(map(str, forecast_df[forecast_df['Source'].str.contains('Actual')]['Year'].tolist()))}
-    - Years with Predicted Data: {', '.join(map(str, forecast_df[forecast_df['Source'] == 'Predicted']['Year'].tolist()))}
-    """)
-    
-    # Enhanced Graph
+    # Calculate metrics
     st.markdown("---")
     
-    # Calculate metrics
-    actual_data_count = len(forecast_df[forecast_df["Source"] == "Actual"])
     start_salary = forecast_df.iloc[0]['Salary (USD)']
     end_salary = forecast_df.iloc[-1]['Salary (USD)']
     current_2025 = forecast_df[forecast_df["Year"] == 2025].iloc[0]['Salary (USD)']
@@ -243,11 +328,11 @@ with tab1:
         growth = ((end_salary - start_salary) / start_salary) * 100
         st.metric("📈 10-Year Growth", f"{growth:.1f}%")
     
-    # Create visualization with color distinction
+    # Enhanced Visualization
     fig = go.Figure()
     
-    # Actual data (any year with actual data)
-    actual_df = forecast_df[forecast_df["Source"].str.contains("Actual")]
+    # Actual data
+    actual_df = forecast_df[forecast_df["Source"] == "Actual"]
     if len(actual_df) > 0:
         fig.add_trace(go.Scatter(
             x=actual_df["Year"],
@@ -258,7 +343,7 @@ with tab1:
             marker=dict(size=12, color='#10b981', line=dict(width=2, color='white')),
             fill='tozeroy',
             fillcolor='rgba(16, 185, 129, 0.1)',
-            hovertemplate='Year: %{x}<br>Salary: $%{y:,.0f}<br>Source: Actual<extra></extra>'
+            hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> Actual<extra></extra>'
         ))
     
     # Predicted data
@@ -273,7 +358,7 @@ with tab1:
             marker=dict(size=12, color='#764ba2', line=dict(width=2, color='white')),
             fill='tozeroy',
             fillcolor='rgba(102, 126, 234, 0.1)',
-            hovertemplate='Year: %{x}<br>Salary: $%{y:,.0f}<br>Source: Predicted<extra></extra>'
+            hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> Predicted<extra></extra>'
         ))
     
     fig.update_layout(
@@ -284,10 +369,22 @@ with tab1:
         hovermode="x unified",
         height=500,
         xaxis=dict(dtick=1),
-        showlegend=True
+        showlegend=True,
+        font=dict(size=12)
     )
     
+    # Add vertical line at 2022
+    fig.add_vline(x=2022.5, line_dash="dot", line_color="gray", 
+                  annotation_text="Training Data | Predictions", 
+                  annotation_position="top")
+    
     st.plotly_chart(fig, use_container_width=True)
+    
+    # Show forecast table
+    with st.expander("📋 View Detailed Forecast Table"):
+        display_df = forecast_df.copy()
+        display_df['Salary (USD)'] = display_df['Salary (USD)'].apply(lambda x: f"${x:,.0f}")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
 # TAB 2: Data Analysis
@@ -298,206 +395,54 @@ with tab2:
     col1, col2 = st.columns(2)
     
     with col1:
-        # Salary by Experience Level
-        exp_avg = df.groupby("experience_level")["salary_in_usd"].mean().reset_index()
+        exp_avg = df.groupby("experience_level")["salary_in_usd"].mean().sort_values(ascending=False).reset_index()
         fig_exp = px.bar(
             exp_avg,
             x="experience_level",
             y="salary_in_usd",
             title="Average Salary by Experience Level",
             color="salary_in_usd",
-            color_continuous_scale="Viridis"
+            color_continuous_scale="Viridis",
+            text="salary_in_usd"
         )
+        fig_exp.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
         fig_exp.update_layout(showlegend=False, xaxis_title="Experience Level", yaxis_title="Avg Salary (USD)")
         st.plotly_chart(fig_exp, use_container_width=True)
     
     with col2:
-        # Salary by Company Size
-        size_avg = df.groupby("company_size")["salary_in_usd"].mean().reset_index()
+        size_avg = df.groupby("company_size")["salary_in_usd"].mean().sort_values(ascending=False).reset_index()
         fig_size = px.bar(
             size_avg,
             x="company_size",
             y="salary_in_usd",
             title="Average Salary by Company Size",
             color="salary_in_usd",
-            color_continuous_scale="Plasma"
+            color_continuous_scale="Plasma",
+            text="salary_in_usd"
         )
+        fig_size.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
         fig_size.update_layout(showlegend=False, xaxis_title="Company Size", yaxis_title="Avg Salary (USD)")
         st.plotly_chart(fig_size, use_container_width=True)
     
-    # Top Paying Jobs 2021-2030 with Year Selector
+    # Top Paying Jobs
     st.markdown("---")
-    st.subheader("💎 Top 10 Highest Paying Jobs by Year")
+    st.subheader("💎 Top 10 Highest Paying Jobs (2022 Data)")
     
-    # Year selector for top paying jobs
-    selected_year_top = st.selectbox(
-        "📅 Select Year to View Top Jobs",
-        list(range(2021, 2031)),
-        index=4,  # Default to 2025
-        key="top_jobs_year"
+    top_jobs_2022 = df[df['work_year'] == 2022].groupby('job_title')['salary_in_usd'].mean().sort_values(ascending=False).head(10).reset_index()
+    
+    fig_top = px.bar(
+        top_jobs_2022,
+        x="salary_in_usd",
+        y="job_title",
+        orientation='h',
+        title="Top 10 Highest Paying Jobs (2022)",
+        color="salary_in_usd",
+        color_continuous_scale="Turbo",
+        text="salary_in_usd"
     )
-    
-    # Get all unique job titles
-    all_jobs = df["job_title"].unique()
-    job_salaries_for_year = []
-    
-    for job in all_jobs:
-        # Use actual data for 2020-2022, try actual for 2023-2025, otherwise predict
-        if selected_year_top <= 2025:
-            actual_data = df[(df["job_title"] == job) & (df["work_year"] == selected_year_top)]
-            if len(actual_data) > 0:
-                avg_salary = actual_data["salary_in_usd"].mean()
-                job_salaries_for_year.append({
-                    "job_title": job,
-                    "salary": avg_salary
-                })
-            elif selected_year_top >= 2023:
-                # For 2023-2025, if no actual data found, predict
-                job_data = df[df["job_title"] == job]
-                if len(job_data) > 0:
-                    most_common_exp = job_data["experience_level"].mode()[0]
-                    most_common_size = job_data["company_size"].mode()[0]
-                    
-                    pred_input = pd.DataFrame({
-                        "work_year": [selected_year_top],
-                        "job_title": [job],
-                        "experience_level": [most_common_exp],
-                        "company_size": [most_common_size]
-                    })
-                    
-                    predicted_salary = selected_model.predict(pred_input)[0]
-                    job_salaries_for_year.append({
-                        "job_title": job,
-                        "salary": predicted_salary
-                    })
-        else:
-            # Predict for 2026-2030
-            job_data = df[df["job_title"] == job]
-            if len(job_data) > 0:
-                most_common_exp = job_data["experience_level"].mode()[0]
-                most_common_size = job_data["company_size"].mode()[0]
-                
-                pred_input = pd.DataFrame({
-                    "work_year": [selected_year_top],
-                    "job_title": [job],
-                    "experience_level": [most_common_exp],
-                    "company_size": [most_common_size]
-                })
-                
-                predicted_salary = selected_model.predict(pred_input)[0]
-                job_salaries_for_year.append({
-                    "job_title": job,
-                    "salary": predicted_salary
-                })
-    
-    # Convert to DataFrame and get top 10
-    if len(job_salaries_for_year) > 0:
-        top_jobs_year = pd.DataFrame(job_salaries_for_year).sort_values("salary", ascending=False).head(10)
-    else:
-        st.warning(f"⚠️ No data available for {selected_year_top}. Please select a different year.")
-        top_jobs_year = pd.DataFrame(columns=["job_title", "salary"])
-    
-    # Determine if this year uses actual or predicted data
-    if selected_year_top <= 2022:
-        data_type = "Actual Data"
-    elif selected_year_top <= 2025:
-        # For 2023-2025, might be mix of actual and predicted
-        data_type = "Actual/Predicted Data"
-    else:
-        data_type = "Predicted Data"
-    
-    if len(top_jobs_year) > 0:
-        fig_top = px.bar(
-            top_jobs_year,
-            x="salary",
-            y="job_title",
-            orientation='h',
-            title=f"Top 10 Highest Paying Jobs in {selected_year_top} ({data_type})",
-            color="salary",
-            color_continuous_scale="Turbo",
-            labels={"salary": "Avg Salary (USD)", "job_title": "Job Title"}
-        )
-        fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, xaxis_title="Avg Salary (USD)", yaxis_title="")
-        st.plotly_chart(fig_top, use_container_width=True)
-    
-    # Show salary comparison across years for top job
-    st.markdown("---")
-    st.subheader("📈 Salary Trends for Top 3 Highest Paying Jobs")
-    
-    # Get top 3 jobs from current selected year
-    if len(top_jobs_year) >= 3:
-        top_3_jobs = top_jobs_year.head(3)["job_title"].tolist()
-    elif len(top_jobs_year) > 0:
-        top_3_jobs = top_jobs_year["job_title"].tolist()
-    else:
-        st.info("ℹ️ Select a year with available data to view salary trends.")
-        top_3_jobs = []
-    
-    if len(top_3_jobs) > 0:
-        # Prepare data for all years (2020-2030) for these top 3 jobs
-        all_years = np.arange(2020, 2031)
-        job_salary_trends = []
-        
-        for job in top_3_jobs:
-            job_data_full = df[df["job_title"] == job]
-            if len(job_data_full) > 0:
-                most_common_exp = job_data_full["experience_level"].mode()[0]
-                most_common_size = job_data_full["company_size"].mode()[0]
-                
-                for year in all_years:
-                    if year <= 2022:
-                        # Use actual data for 2020-2022
-                        actual_data = df[(df["job_title"] == job) & (df["work_year"] == year)]
-                        if len(actual_data) > 0:
-                            salary = actual_data["salary_in_usd"].mean()
-                            data_type_point = "Actual"
-                        else:
-                            # If no actual data, predict
-                            pred_input = pd.DataFrame({
-                                "work_year": [year],
-                                "job_title": [job],
-                                "experience_level": [most_common_exp],
-                                "company_size": [most_common_size]
-                            })
-                            salary = selected_model.predict(pred_input)[0]
-                            data_type_point = "Predicted"
-                    else:
-                        # Predict for 2023-2030 (no reliable actual data available)
-                        pred_input = pd.DataFrame({
-                            "work_year": [year],
-                            "job_title": [job],
-                            "experience_level": [most_common_exp],
-                            "company_size": [most_common_size]
-                        })
-                        salary = selected_model.predict(pred_input)[0]
-                        data_type_point = "Predicted"
-                    
-                    job_salary_trends.append({
-                        "job_title": job,
-                        "year": year,
-                        "salary": salary,
-                        "type": data_type_point
-                    })
-        
-        trends_df = pd.DataFrame(job_salary_trends)
-        
-        fig_trends = px.line(
-            trends_df,
-            x="year",
-            y="salary",
-            color="job_title",
-            markers=True,
-            title="Salary Trends (2020-2030) - Top 3 Jobs",
-            labels={"year": "Year", "salary": "Salary (USD)", "job_title": "Job Title"}
-        )
-        
-        # Add a vertical line to separate actual from predicted
-        fig_trends.add_vline(x=2022.5, line_dash="dash", line_color="gray", 
-                             annotation_text="Actual | Predicted", 
-                             annotation_position="top")
-        
-        fig_trends.update_layout(hovermode="x unified", height=500)
-        st.plotly_chart(fig_trends, use_container_width=True)
+    fig_top.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
+    fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
+    st.plotly_chart(fig_top, use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 3: Salary Calculator
@@ -505,178 +450,113 @@ with tab2:
 with tab3:
     st.subheader("💰 Salary Calculator")
     
-    col1, col2 = st.columns([2, 1])
+    calc_year = st.slider("📅 Select Year", 2020, 2035, 2025)
     
-    with col1:
-        calc_year = st.slider("📅 Select Year", 2020, 2035, 2025)
+    salary_value = predict_salary(calc_year, custom_job, custom_exp, custom_size, prediction_method)
     
-    # Determine if we're using actual data or prediction
-    is_actual_data = (calc_year >= 2020 and calc_year <= 2022)
-    
-    if is_actual_data:
-        # Try to get actual data
-        actual_calc_data = df[
-            (df["work_year"] == calc_year) & 
-            (df["job_title"] == custom_job) & 
-            (df["experience_level"] == custom_exp) & 
-            (df["company_size"] == custom_size)
-        ]
-        
-        if len(actual_calc_data) > 0:
-            # Use actual average
-            salary_value = actual_calc_data["salary_in_usd"].mean()
-            salary_label = "Actual Average Salary"
-            data_badge = "📊 Actual Data"
-        else:
-            # No actual data available, use prediction
-            single_input = pd.DataFrame({
-                "work_year": [calc_year],
-                "job_title": [custom_job],
-                "experience_level": [custom_exp],
-                "company_size": [custom_size]
-            })
-            salary_value = selected_model.predict(single_input)[0]
-            salary_label = "Predicted Salary"
-            data_badge = "🔮 Predicted (No Actual Data)"
-    else:
-        # Use prediction for years outside 2020-2022
-        single_input = pd.DataFrame({
-            "work_year": [calc_year],
-            "job_title": [custom_job],
-            "experience_level": [custom_exp],
-            "company_size": [custom_size]
-        })
-        salary_value = selected_model.predict(single_input)[0]
-        salary_label = "Predicted Salary"
-        data_badge = "🔮 Predicted Data"
-    
-    # Display prediction with styling
+    # Display prediction
     st.markdown("---")
     
-    # Data type badge
-    if is_actual_data and len(actual_calc_data) > 0:
-        st.success(f"✅ {data_badge}")
+    if calc_year <= 2022:
+        st.success("✅ Based on actual training data")
     else:
-        st.info(f"ℹ️ {data_badge}")
+        st.info(f"ℹ️ Predicted using {prediction_method}")
     
     col_x, col_y, col_z = st.columns([1, 2, 1])
     
     with col_y:
         st.markdown(f"""
         <div class="metric-card">
-            <h3>{salary_label} for {calc_year}</h3>
+            <h3>Predicted Salary for {calc_year}</h3>
             <h1 style="font-size: 3rem; margin: 1rem 0;">${salary_value:,.0f}</h1>
             <p>{custom_job} | {custom_exp} | {custom_size}</p>
         </div>
         """, unsafe_allow_html=True)
     
-    # Comparison with market
+    # Market comparison
     st.markdown("---")
     st.subheader("📊 Market Comparison")
     
-    # Get market average for the selected year and job
-    if calc_year >= 2020 and calc_year <= 2022:
-        # For years with actual data, use year-specific market average
-        market_data = df[(df["job_title"] == custom_job) & (df["work_year"] == calc_year)]
-        if len(market_data) > 0:
-            market_avg = market_data["salary_in_usd"].mean()
-            market_label = f"Market Avg ({calc_year})"
-        else:
-            # If no data for this specific year, use overall average for this job
-            market_avg = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
-            market_label = "Overall Market Avg"
-    else:
-        # For future years (2023+), predict market average for the job
-        # Use median experience level and company size for market average
-        job_data = df[df["job_title"] == custom_job]
-        if len(job_data) > 0:
-            # Get most common experience and company size for this job
-            common_exp = job_data["experience_level"].mode()[0]
-            common_size = job_data["company_size"].mode()[0]
-            
-            market_pred_input = pd.DataFrame({
-                "work_year": [calc_year],
-                "job_title": [custom_job],
-                "experience_level": [common_exp],
-                "company_size": [common_size]
-            })
-            market_avg = selected_model.predict(market_pred_input)[0]
-            market_label = f"Predicted Market Avg ({calc_year})"
-        else:
-            market_avg = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
-            market_label = "Overall Market Avg"
-    
+    market_avg = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
     diff = salary_value - market_avg
     diff_pct = (diff / market_avg) * 100 if market_avg > 0 else 0
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Your Salary", f"${salary_value:,.0f}")
+        st.metric("Your Predicted Salary", f"${salary_value:,.0f}")
     with col2:
-        st.metric(market_label, f"${market_avg:,.0f}")
+        st.metric("Overall Market Avg", f"${market_avg:,.0f}")
     with col3:
         st.metric("Difference", f"${diff:,.0f}", f"{diff_pct:+.1f}%")
-    
-    # Add explanation
-    if calc_year >= 2023:
-        st.caption(f"💡 Market average for {calc_year} is predicted using the most common experience level ({common_exp}) and company size ({common_size}) for {custom_job}.")
 
 # ---------------------------------------------------------
-# TAB 4: Insights
+# TAB 4: Model Insights
 # ---------------------------------------------------------
 with tab4:
-    st.subheader("🗺️ Key Insights & Trends")
+    st.subheader("🗺️ Model Performance & Insights")
+    
+    # Compare all models
+    st.markdown("### 📊 Model Comparison")
+    
+    comparison_data = []
+    for model_name, metrics in performance_metrics.items():
+        comparison_data.append({
+            "Model": model_name,
+            "R² Score": metrics["R² Score"],
+            "MAE": metrics["MAE"],
+            "RMSE": metrics["RMSE"]
+        })
+    
+    comparison_df = pd.DataFrame(comparison_data)
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 📈 Yearly Salary Trends")
-        yearly_avg = df.groupby("work_year")["salary_in_usd"].mean().reset_index()
-        fig_yearly = px.line(
-            yearly_avg,
-            x="work_year",
-            y="salary_in_usd",
-            markers=True,
-            title="Average Salary Over Years"
+        fig_r2 = px.bar(
+            comparison_df,
+            x="Model",
+            y="R² Score",
+            title="R² Score Comparison (Higher is Better)",
+            color="R² Score",
+            color_continuous_scale="Greens"
         )
-        fig_yearly.update_traces(line=dict(color='#667eea', width=3), marker=dict(size=10))
-        st.plotly_chart(fig_yearly, use_container_width=True)
+        st.plotly_chart(fig_r2, use_container_width=True)
     
     with col2:
-        st.markdown("### 🎯 Salary Distribution")
-        fig_dist = px.histogram(
-            df,
-            x="salary_in_usd",
-            nbins=50,
-            title="Overall Salary Distribution",
-            color_discrete_sequence=['#764ba2']
+        fig_mae = px.bar(
+            comparison_df,
+            x="Model",
+            y="MAE",
+            title="MAE Comparison (Lower is Better)",
+            color="MAE",
+            color_continuous_scale="Reds_r"
         )
-        fig_dist.update_layout(xaxis_title="Salary (USD)", yaxis_title="Count")
-        st.plotly_chart(fig_dist, use_container_width=True)
+        st.plotly_chart(fig_mae, use_container_width=True)
     
-    # Key Statistics
+    # Prediction uncertainty warning
     st.markdown("---")
-    st.markdown("### 📊 Key Statistics")
+    st.markdown("### ⚠️ Understanding Predictions")
     
-    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-    
-    with stat_col1:
-        st.metric("📊 Median Salary", f"${df['salary_in_usd'].median():,.0f}")
-    with stat_col2:
-        st.metric("💰 Max Salary", f"${df['salary_in_usd'].max():,.0f}")
-    with stat_col3:
-        st.metric("📉 Min Salary", f"${df['salary_in_usd'].min():,.0f}")
-    with stat_col4:
-        std_dev = df['salary_in_usd'].std()
-        st.metric("📏 Std Deviation", f"${std_dev:,.0f}")
+    st.markdown("""
+    <div class="warning-box">
+        <h4>🎯 Model Limitations:</h4>
+        <ul>
+            <li><b>Training Data:</b> Models trained on 2020-2022 data only</li>
+            <li><b>Future Predictions:</b> Predictions beyond 2022 are extrapolations</li>
+            <li><b>Uncertainty:</b> Predictions get less reliable further into the future</li>
+            <li><b>Market Changes:</b> Cannot predict major market disruptions or changes</li>
+        </ul>
+        <p><b>Recommendation:</b> Use predictions as guidelines, not absolute values. Consider confidence intervals and market trends.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # Footer
 # ---------------------------------------------------------
 st.markdown("---")
-st.markdown("""
+st.markdown(f"""
     <div style='text-align: center; color: #666; padding: 2rem;'>
         <p>Built with Streamlit • Powered by Machine Learning</p>
-        <p style='font-size: 0.8rem;'>Model: {} | R² Score: {:.3f}</p>
+        <p style='font-size: 0.8rem;'>Model: {model_type} | R² Score: {performance_metrics[model_type]["R² Score"]:.3f} | Method: {prediction_method}</p>
     </div>
-""".format(model_type, performance_metrics[model_type]["R² Score"]), unsafe_allow_html=True)
+""", unsafe_allow_html=True)
