@@ -72,6 +72,13 @@ model_type = st.sidebar.selectbox(
     help="Choose the prediction algorithm"
 )
 
+# Prediction method selector
+prediction_method = st.sidebar.radio(
+    "Prediction Method",
+    ["Growth-Based (Recommended)", "Pure ML Model", "Hybrid"],
+    help="Growth-Based: Uses historical growth rates\nPure ML: Uses model only\nHybrid: Blends both approaches"
+)
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 Dataset Info")
 st.sidebar.info(f"""
@@ -163,13 +170,42 @@ with st.sidebar.expander("📈 Model Performance", expanded=True):
     st.caption(f"CV: {perf['CV R² Mean']:.3f}±{perf['CV R² Std']:.3f}")
 
 # ---------------------------------------------------------
-# Prediction Function - ONLY for 2023-2030
+# Calculate Growth Rates from Historical Data
 # ---------------------------------------------------------
-def get_salary(year, job, exp, size):
+@st.cache_data
+def calculate_growth_rate(data, job, exp, size):
+    """Calculate historical growth rate for this specific profile"""
+    # Try to get data for this specific combination
+    profile_data = data[
+        (data["job_title"] == job) & 
+        (data["experience_level"] == exp) & 
+        (data["company_size"] == size)
+    ].groupby("work_year")["salary_in_usd"].mean()
+    
+    if len(profile_data) >= 2:
+        years = profile_data.index.values
+        salaries = profile_data.values
+        # Calculate average year-over-year growth
+        growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+        return max(0.03, min(growth, 0.15))  # Cap between 3-15%
+    
+    # Fall back to job-level growth
+    job_data = data[data["job_title"] == job].groupby("work_year")["salary_in_usd"].mean()
+    if len(job_data) >= 2:
+        years = job_data.index.values
+        salaries = job_data.values
+        growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+        return max(0.03, min(growth, 0.12))
+    
+    # Default to 5% annual growth
+    return 0.05
+
+# ---------------------------------------------------------
+# Prediction Function with Multiple Methods
+# ---------------------------------------------------------
+def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     """
-    Get salary: 
-    - If year 2020-2022: Use ACTUAL data from dataset
-    - If year 2023-2030: Use ML MODEL prediction
+    Get salary with multiple prediction methods
     """
     if year >= 2020 and year <= 2022:
         # USE ACTUAL DATA
@@ -183,7 +219,6 @@ def get_salary(year, job, exp, size):
         if len(actual) > 0:
             return actual["salary_in_usd"].mean(), "Actual"
         else:
-            # If exact match not found, try partial matches
             actual_partial = df[
                 (df["work_year"] == year) & 
                 (df["job_title"] == job) & 
@@ -193,7 +228,6 @@ def get_salary(year, job, exp, size):
             if len(actual_partial) > 0:
                 return actual_partial["salary_in_usd"].mean(), "Actual (Partial)"
             else:
-                # Last resort: just job and year
                 actual_job = df[
                     (df["work_year"] == year) & 
                     (df["job_title"] == job)
@@ -202,16 +236,78 @@ def get_salary(year, job, exp, size):
                 if len(actual_job) > 0:
                     return actual_job["salary_in_usd"].mean(), "Actual (Job Only)"
     
-    # USE ML PREDICTION for 2023-2030 OR if no actual data found
-    pred_input = pd.DataFrame({
-        "work_year": [year],
-        "job_title": [job],
-        "experience_level": [exp],
-        "company_size": [size]
-    })
+    # PREDICTIONS for 2023-2030
     
-    predicted_salary = selected_model.predict(pred_input)[0]
-    return predicted_salary, "Predicted"
+    # Method 1: Growth-Based (Most Realistic)
+    if method == "Growth-Based (Recommended)":
+        last_actual_data = df[
+            (df["job_title"] == job) & 
+            (df["experience_level"] == exp) & 
+            (df["company_size"] == size)
+        ]
+        
+        if len(last_actual_data) > 0:
+            last_year_data = last_actual_data[last_actual_data["work_year"] == last_actual_data["work_year"].max()]
+            base_salary_2022 = last_year_data["salary_in_usd"].mean()
+            base_year = last_year_data["work_year"].iloc[0]
+            
+            growth_rate = calculate_growth_rate(df, job, exp, size)
+            years_ahead = year - base_year
+            predicted_salary = base_salary_2022 * ((1 + growth_rate) ** years_ahead)
+            
+            return predicted_salary, f"Predicted (Growth: {growth_rate*100:.1f}%/yr)"
+    
+    # Method 2: Pure ML Model
+    elif method == "Pure ML Model":
+        pred_input = pd.DataFrame({
+            "work_year": [year],
+            "job_title": [job],
+            "experience_level": [exp],
+            "company_size": [size]
+        })
+        predicted_salary = selected_model.predict(pred_input)[0]
+        return predicted_salary, "Predicted (ML Only)"
+    
+    # Method 3: Hybrid (Blend of both)
+    else:  # Hybrid
+        # Get growth-based prediction
+        last_actual_data = df[
+            (df["job_title"] == job) & 
+            (df["experience_level"] == exp) & 
+            (df["company_size"] == size)
+        ]
+        
+        if len(last_actual_data) > 0:
+            last_year_data = last_actual_data[last_actual_data["work_year"] == last_actual_data["work_year"].max()]
+            base_salary_2022 = last_year_data["salary_in_usd"].mean()
+            base_year = last_year_data["work_year"].iloc[0]
+            
+            growth_rate = calculate_growth_rate(df, job, exp, size)
+            years_ahead = year - base_year
+            growth_prediction = base_salary_2022 * ((1 + growth_rate) ** years_ahead)
+            
+            # Get ML prediction
+            pred_input = pd.DataFrame({
+                "work_year": [year],
+                "job_title": [job],
+                "experience_level": [exp],
+                "company_size": [size]
+            })
+            ml_prediction = selected_model.predict(pred_input)[0]
+            
+            # Blend: 70% growth-based, 30% ML
+            blended = 0.7 * growth_prediction + 0.3 * ml_prediction
+            return blended, "Predicted (Hybrid)"
+        else:
+            # Fall back to ML only
+            pred_input = pd.DataFrame({
+                "work_year": [year],
+                "job_title": [job],
+                "experience_level": [exp],
+                "company_size": [size]
+            })
+            predicted_salary = selected_model.predict(pred_input)[0]
+            return predicted_salary, "Predicted (ML Only)"
 
 # ---------------------------------------------------------
 # Main Content - Tabs
@@ -233,6 +329,11 @@ with tab1:
     with col3:
         custom_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
     
+    # Show growth rate info
+    if prediction_method == "Growth-Based (Recommended)":
+        growth_rate = calculate_growth_rate(df, custom_job, custom_exp, custom_size)
+        st.info(f"📈 Historical growth rate for this profile: **{growth_rate*100:.1f}% per year** (based on 2020-2022 data)")
+    
     st.markdown("---")
     
     # Generate forecast for 2020-2030
@@ -240,7 +341,7 @@ with tab1:
     forecast_data = []
     
     for year in all_years:
-        salary, source = get_salary(year, custom_job, custom_exp, custom_size)
+        salary, source = get_salary(year, custom_job, custom_exp, custom_size, prediction_method)
         forecast_data.append({
             "Year": year,
             "Salary (USD)": salary,
@@ -422,7 +523,7 @@ with tab2:
             most_common_exp = job_data['experience_level'].mode()[0]
             most_common_size = job_data['company_size'].mode()[0]
             
-            salary, _ = get_salary(year_selector, job, most_common_exp, most_common_size)
+            salary, _ = get_salary(year_selector, job, most_common_exp, most_common_size, prediction_method)
             job_salaries.append({
                 "job_title": job,
                 "salary_in_usd": salary
@@ -461,7 +562,7 @@ with tab3:
     calc_year = st.slider("📅 Select Year", 2020, 2030, 2025)
     
     # Get salary
-    salary_value, data_source = get_salary(calc_year, custom_job, custom_exp, custom_size)
+    salary_value, data_source = get_salary(calc_year, custom_job, custom_exp, custom_size, prediction_method)
     
     st.markdown("---")
     
