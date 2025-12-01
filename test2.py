@@ -76,7 +76,7 @@ model_type = st.sidebar.selectbox(
 prediction_method = st.sidebar.radio(
     "Prediction Method",
     ["Growth-Based (Recommended)", "Pure ML Model", "Hybrid"],
-    help="Growth-Based: Uses historical growth rates\nPure ML: Uses model only\nHybrid: Blends both approaches"
+    help="Growth-Based: Uses historical growth patterns\nPure ML: Uses model only\nHybrid: Blends both approaches"
 )
 
 st.sidebar.markdown("---")
@@ -101,7 +101,9 @@ def train_models(data):
     X = data[["work_year", "job_title", "experience_level", "company_size"]]
     y = data["salary_in_usd"]
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
     
     # Categorical columns to encode
     categorical_cols = ["job_title", "experience_level", "company_size"]
@@ -143,7 +145,9 @@ def train_models(data):
         y_pred = pipeline.predict(X_test)
         
         # Cross-validation
-        cv_scores = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='r2')
+        cv_scores = cross_val_score(
+            pipeline, X_train, y_train, cv=5, scoring='r2'
+        )
         
         trained_models[name] = pipeline
         metrics[name] = {
@@ -170,228 +174,139 @@ with st.sidebar.expander("📈 Model Performance", expanded=True):
     st.caption(f"CV: {perf['CV R² Mean']:.3f}±{perf['CV R² Std']:.3f}")
 
 # ---------------------------------------------------------
-# Calculate Growth Rates from Historical Data
+# Helper: Average Growth from Similar Profiles
 # ---------------------------------------------------------
 @st.cache_data
-def calculate_growth_rate(data, job, exp, size):
-    """Calculate historical growth rate for this specific profile"""
-    # Try to get data for this specific combination
-    profile_data = data[
-        (data["job_title"] == job) & 
-        (data["experience_level"] == exp) & 
-        (data["company_size"] == size)
-    ].groupby("work_year")["salary_in_usd"].mean()
-    
-    if len(profile_data) >= 2:
-        # Has multiple years - calculate actual growth
-        years = profile_data.index.values
-        salaries = profile_data.values
-        growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-        return max(0.03, min(growth, 0.15)), "profile"  # Cap between 3-15%
-    
-    # Only 1 year or no data - try job level
-    job_data = data[data["job_title"] == job].groupby("work_year")["salary_in_usd"].mean()
-    if len(job_data) >= 2:
-        years = job_data.index.values
-        salaries = job_data.values
-        growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-        return max(0.03, min(growth, 0.12)), "job"
-    
-    # Try experience level
-    exp_data = data[data["experience_level"] == exp].groupby("work_year")["salary_in_usd"].mean()
-    if len(exp_data) >= 2:
-        years = exp_data.index.values
-        salaries = exp_data.values
-        growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-        return max(0.03, min(growth, 0.12)), "experience"
-    
-    # Default to market average (5% annual growth)
-    return 0.05, "market"
-
-# ---------------------------------------------------------
-# Get mean prediction from similar profiles
-# ---------------------------------------------------------
-@st.cache_data
-def get_mean_prediction_from_similar(data, job, exp):
+def get_mean_growth_from_similar(data, job, exp):
     """
-    If a profile has only 1 year of data, predict based on AVERAGE GROWTH RATE of similar profiles
+    For profiles with only 1 year of data:
+    Use the average annual growth rate of similar profiles:
+    - Same job + experience, across different company sizes
+    - Fallback: job only
+    - Fallback: experience only
+    - Final fallback: default 5% growth
     """
-    # Get all profiles with the same job and experience (ignore company size)
-    similar_profiles = data[
-        (data["job_title"] == job) & 
+    # First try: same job + experience
+    similar = data[
+        (data["job_title"] == job) &
         (data["experience_level"] == exp)
     ]
     
-    if len(similar_profiles) == 0:
-        # No similar profiles, use job-only
-        similar_profiles = data[data["job_title"] == job]
-    
-    if len(similar_profiles) == 0:
-        # Still nothing, use experience-only
-        similar_profiles = data[data["experience_level"] == exp]
-    
-    if len(similar_profiles) == 0:
-        # No similar profiles at all
-        return None, 0
-    
-    # Calculate AVERAGE GROWTH RATE from all similar profiles that have 2+ years
     growth_rates = []
     
-    # Get unique combinations of company sizes for this job+exp
-    for size in similar_profiles['company_size'].unique():
-        profile_data = data[
-            (data["job_title"] == job) & 
-            (data["experience_level"] == exp) & 
-            (data["company_size"] == size)
-        ].groupby("work_year")["salary_in_usd"].mean()
-        
-        # Only include profiles with 2+ years
-        if len(profile_data) >= 2:
-            years = profile_data.index.values
-            salaries = profile_data.values
-            growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-            # Cap extreme values
-            growth = max(-0.20, min(growth, 0.20))
-            growth_rates.append(growth)
+    if len(similar) > 0:
+        # Iterate by company size combos
+        for size in similar["company_size"].unique():
+            prof = data[
+                (data["job_title"] == job) &
+                (data["experience_level"] == exp) &
+                (data["company_size"] == size)
+            ].groupby("work_year")["salary_in_usd"].mean().sort_index()
+            
+            if len(prof) >= 2:
+                years = prof.index.values
+                salaries = prof.values
+                g = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+                g = float(np.clip(g, -0.20, 0.20))
+                growth_rates.append(g)
     
-    # Calculate average growth rate
+    # If we found multi-year profiles at this (job, exp) level
     if len(growth_rates) > 0:
-        avg_growth = np.mean(growth_rates)
-    else:
-        # No multi-year profiles, use overall job/exp growth
-        yearly_avg = similar_profiles.groupby('work_year')['salary_in_usd'].mean()
-        if len(yearly_avg) >= 2:
-            years = yearly_avg.index.values
-            salaries = yearly_avg.values
-            avg_growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-            avg_growth = max(-0.15, min(avg_growth, 0.15))
-        else:
-            avg_growth = 0.05  # Default
+        return float(np.mean(growth_rates)), len(growth_rates)
     
-    return avg_growth, len(growth_rates)
+    # Fallback: job-only
+    job_series = data[data["job_title"] == job].groupby("work_year")["salary_in_usd"].mean().sort_index()
+    if len(job_series) >= 2:
+        years = job_series.index.values
+        salaries = job_series.values
+        g = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+        g = float(np.clip(g, -0.15, 0.15))
+        return g, 0
+    
+    # Fallback: experience-only
+    exp_series = data[data["experience_level"] == exp].groupby("work_year")["salary_in_usd"].mean().sort_index()
+    if len(exp_series) >= 2:
+        years = exp_series.index.values
+        salaries = exp_series.values
+        g = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+        g = float(np.clip(g, -0.15, 0.15))
+        return g, 0
+    
+    # Final fallback: default 5%
+    return 0.05, 0
 
 # ---------------------------------------------------------
-# Prediction Function with Multiple Methods
+# Helper: Own Profile Growth (for ≥2 years)
+# ---------------------------------------------------------
+@st.cache_data
+def calculate_growth_rate(data, job, exp, size):
+    """
+    Calculate annual growth rate using this specific profile's own history.
+    Requires at least 2 years of data for (job, exp, size).
+    """
+    profile_data = data[
+        (data["job_title"] == job) &
+        (data["experience_level"] == exp) &
+        (data["company_size"] == size)
+    ].groupby("work_year")["salary_in_usd"].mean().sort_index()
+    
+    if len(profile_data) < 2:
+        return None, None, None  # Not enough data
+    
+    years = profile_data.index.values
+    salaries = profile_data.values
+    
+    first_year, last_year = years[0], years[-1]
+    first_salary, last_salary = salaries[0], salaries[-1]
+    
+    if first_salary <= 0:
+        return None, None, None
+    
+    growth = (last_salary - first_salary) / first_salary / (last_year - first_year)
+    growth = float(np.clip(growth, -0.20, 0.20))
+    
+    return growth, years.tolist(), salaries.tolist()
+
+# ---------------------------------------------------------
+# Prediction Function with New Rules
 # ---------------------------------------------------------
 def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     """
-    Get salary with multiple prediction methods
-    - Years 2020-2022: Use ACTUAL data if exists
-    - Years 2023-2030: ALWAYS use predictions
+    New rules:
+    1) If profile (job+exp+size) has ≥ 2 years of actual data:
+       - Use its own historical growth pattern for predictions.
+    2) If profile has exactly 1 year of actual data:
+       - Use average growth pattern from other similar profiles.
+    3) If profile has 0 years of actual data:
+       - Show warning in UI (Tab 1) and rely on ML model for estimates.
+    - For 2020-2022, if actual data exists for that year, always use actual.
     """
-    # ONLY try actual data for years 2020-2022
-    if year >= 2020 and year <= 2022:
-        # USE ACTUAL DATA
-        actual = df[
-            (df["work_year"] == year) & 
-            (df["job_title"] == job) & 
-            (df["experience_level"] == exp) & 
-            (df["company_size"] == size)
-        ]
-        
-        if len(actual) > 0:
-            return actual["salary_in_usd"].mean(), "Actual"
-        
-        # Try partial match (without company size)
-        actual_partial = df[
-            (df["work_year"] == year) & 
-            (df["job_title"] == job) & 
-            (df["experience_level"] == exp)
-        ]
-        
-        if len(actual_partial) > 0:
-            return actual_partial["salary_in_usd"].mean(), "Actual (Partial)"
-        
-        # Try job only
-        actual_job = df[
-            (df["work_year"] == year) & 
-            (df["job_title"] == job)
-        ]
-        
-        if len(actual_job) > 0:
-            return actual_job["salary_in_usd"].mean(), "Actual (Job Only)"
-        
-        # If no actual data found for 2020-2022, fall through to prediction
-    
-    # ========================================
-    # PREDICTIONS (for 2023-2030 OR if no actual data for 2020-2022)
-    # ========================================
-    
-    # Get profile history
+    # Full profile history
     profile_history = df[
-        (df["job_title"] == job) & 
-        (df["experience_level"] == exp) & 
+        (df["job_title"] == job) &
+        (df["experience_level"] == exp) &
         (df["company_size"] == size)
     ]
     
-    # If NO data at all for this profile, try broader match
-    if len(profile_history) == 0:
-        profile_history = df[
-            (df["job_title"] == job) & 
-            (df["experience_level"] == exp)
-        ]
+    years_available = sorted(profile_history["work_year"].unique())
+    num_years = len(years_available)
     
-    if len(profile_history) == 0:
-        profile_history = df[df["job_title"] == job]
+    # 1) For 2020-2022: if we have actual data for that exact year, return actual
+    if year <= 2022:
+        actual_for_year = profile_history[profile_history["work_year"] == year]
+        if len(actual_for_year) > 0:
+            return actual_for_year["salary_in_usd"].mean(), "Actual"
     
-    if len(profile_history) == 0:
-        # Absolutely no data - use overall market average
-        market_avg = df.groupby('work_year')['salary_in_usd'].mean()
-        if len(market_avg) >= 2:
-            years = market_avg.index.values
-            salaries = market_avg.values
-            growth = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
-            growth = max(0.03, min(growth, 0.12))
-        else:
-            growth = 0.05
-        
-        base_salary = df['salary_in_usd'].mean()
-        base_year = df['work_year'].max()
-        years_ahead = year - base_year
-        return max(0, base_salary * ((1 + growth) ** years_ahead)), "Predicted (Market Avg)"
+    # From here, we are either:
+    # - predicting 2023-2030, or
+    # - predicting 2020-2022 with no exact actual for this profile
     
-    unique_years = profile_history["work_year"].nunique()
-    
-    # If only 1 year of data, use AVERAGE GROWTH RATE from similar profiles
-    if unique_years == 1:
-        result = get_mean_prediction_from_similar(df, job, exp)
-        
-        if result is not None and result[0] is not None:
-            avg_growth, num_profiles = result
-            
-            # Get the single year's salary
-            base_salary = profile_history["salary_in_usd"].mean()
-            base_year = profile_history["work_year"].iloc[0]
-            
-            # Apply average growth rate
-            years_ahead = year - base_year
-            predicted_salary = base_salary * ((1 + avg_growth) ** years_ahead)
-            
-            return max(0, predicted_salary), "Predicted"
-        # If can't get average from similar, fall through to other methods
-    
-    # Method 1: Growth-Based (Most Realistic)
-    if method == "Growth-Based (Recommended)":
-        if len(profile_history) > 0:
-            last_year_data = profile_history[profile_history["work_year"] == profile_history["work_year"].max()]
-            base_salary = last_year_data["salary_in_usd"].mean()
-            base_year = last_year_data["work_year"].iloc[0]
-            
-            # Ensure base salary is positive
-            if base_salary <= 0:
-                base_salary = df[df['job_title'] == job]['salary_in_usd'].mean()
-            
-            # IMPORTANT: Get growth rate - it should use the profile's OWN data if it has 2+ years
-            growth_rate, growth_source = calculate_growth_rate(df, job, exp, size)
-            
-            years_ahead = year - base_year
-            predicted_salary = base_salary * ((1 + growth_rate) ** years_ahead)
-            
-            # Debug: ensure we're actually using the profile's own negative growth
-            return max(0, predicted_salary), "Predicted"
-    
-    # Method 2: Pure ML Model
-    elif method == "Pure ML Model":
+    # ------------------------------------------------------
+    # Case 0: No actual data at all for this profile
+    # ------------------------------------------------------
+    if num_years == 0:
+        # No actual data for this exact profile.
+        # Use ML-only prediction but label clearly.
         pred_input = pd.DataFrame({
             "work_year": [year],
             "job_title": [job],
@@ -399,36 +314,66 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
             "company_size": [size]
         })
         predicted_salary = selected_model.predict(pred_input)[0]
-        return max(0, predicted_salary), "Predicted"
+        return max(0, predicted_salary), "Predicted (ML Only - No Profile History)"
     
-    # Method 3: Hybrid
-    else:
-        if len(profile_history) > 0:
-            last_year_data = profile_history[profile_history["work_year"] == profile_history["work_year"].max()]
-            base_salary = last_year_data["salary_in_usd"].mean()
-            base_year = last_year_data["work_year"].iloc[0]
-            
-            if base_salary <= 0:
-                base_salary = df[df['job_title'] == job]['salary_in_usd'].mean()
-            
-            growth_rate, _ = calculate_growth_rate(df, job, exp, size)
-            years_ahead = year - base_year
-            growth_prediction = base_salary * ((1 + growth_rate) ** years_ahead)
-            
-            # Get ML prediction
+    # ------------------------------------------------------
+    # Case 1: Exactly 1 year of data
+    # ------------------------------------------------------
+    if num_years == 1:
+        base_year = years_available[0]
+        base_salary = profile_history["salary_in_usd"].mean()
+        
+        # If we're asking about the actual year itself
+        if year == base_year:
+            return base_salary, "Actual (Single Year)"
+        
+        # Get average growth from similar profiles
+        avg_growth, num_profiles = get_mean_growth_from_similar(df, job, exp)
+        
+        years_ahead = year - base_year
+        predicted_salary = base_salary * ((1 + avg_growth) ** years_ahead)
+        
+        if num_profiles > 0:
+            src = f"Predicted (Similar Profiles Pattern, {num_profiles} profiles)"
+        else:
+            src = "Predicted (Job/Experience-Level Pattern)"
+        
+        return max(0, predicted_salary), src
+    
+    # ------------------------------------------------------
+    # Case 2: 2 or more years of data → use own pattern
+    # ------------------------------------------------------
+    if num_years >= 2:
+        growth_rate, yrs, sals = calculate_growth_rate(df, job, exp, size)
+        
+        # If for some reason growth_rate couldn't be computed, fallback to ML
+        if growth_rate is None:
             pred_input = pd.DataFrame({
                 "work_year": [year],
                 "job_title": [job],
                 "experience_level": [exp],
                 "company_size": [size]
             })
-            ml_prediction = selected_model.predict(pred_input)[0]
-            
-            # Blend: 70% growth-based, 30% ML
-            blended = 0.7 * growth_prediction + 0.3 * ml_prediction
-            return max(0, blended), "Predicted"
-    
-    # Final fallback
+            predicted_salary = selected_model.predict(pred_input)[0]
+            return max(0, predicted_salary), "Predicted (ML Fallback)"
+        
+        # Use the last actual year as base
+        last_year = yrs[-1]
+        last_salary = sals[-1]
+        
+        # If we are within the historical range and have actual data → return actual
+        if year in yrs:
+            actual_for_year = profile_history[profile_history["work_year"] == year]
+            if len(actual_for_year) > 0:
+                return actual_for_year["salary_in_usd"].mean(), "Actual"
+        
+        # Future (or missing) year → extrapolate using own growth pattern
+        years_ahead = year - last_year
+        predicted_salary = last_salary * ((1 + growth_rate) ** years_ahead)
+        
+        return max(0, predicted_salary), "Predicted (Own Profile Pattern)"
+
+    # Safety fallback (should not reach here)
     pred_input = pd.DataFrame({
         "work_year": [year],
         "job_title": [job],
@@ -436,12 +381,17 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
         "company_size": [size]
     })
     predicted_salary = selected_model.predict(pred_input)[0]
-    return max(0, predicted_salary), "Predicted"
+    return max(0, predicted_salary), "Predicted (Fallback)"
 
 # ---------------------------------------------------------
 # Main Content - Tabs
 # ---------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["🔮 Salary Forecast", "📊 Data Analysis", "💰 Salary Calculator", "🗺️ Model Insights"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🔮 Salary Forecast", 
+    "📊 Data Analysis", 
+    "💰 Salary Calculator", 
+    "🗺️ Model Insights"
+])
 
 # ---------------------------------------------------------
 # TAB 1: Salary Forecast (2020-2030)
@@ -458,45 +408,80 @@ with tab1:
     with col3:
         custom_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
     
-    # Show growth rate info
-    if prediction_method == "Growth-Based (Recommended)":
-        # Check if profile has only 1 year
-        profile_history = df[
-            (df["job_title"] == custom_job) & 
-            (df["experience_level"] == custom_exp) & 
-            (df["company_size"] == custom_size)
-        ]
-        unique_years = profile_history["work_year"].nunique()
+    # Show growth / data availability info (based on new rules)
+    profile_history = df[
+        (df["job_title"] == custom_job) & 
+        (df["experience_level"] == custom_exp) & 
+        (df["company_size"] == custom_size)
+    ]
+    unique_years = profile_history["work_year"].nunique()
+    
+    if unique_years == 0:
+        st.warning(
+            "⚠️ No actual historical data for this exact profile "
+            f"({custom_job}, {custom_exp}, {custom_size}). "
+            "Predictions will rely more on the ML model and broader patterns."
+        )
+    elif unique_years == 1:
+        year_available = profile_history['work_year'].iloc[0]
+        salary_available = profile_history['salary_in_usd'].mean()
+        avg_growth, num_profiles = get_mean_growth_from_similar(df, custom_job, custom_exp)
         
-        if unique_years == 1:
-            result = get_mean_prediction_from_similar(df, custom_job, custom_exp)
-            year_available = profile_history['work_year'].iloc[0]
-            salary_available = profile_history['salary_in_usd'].mean()
-            
-            if result is not None and result[0] is not None:
-                avg_growth, num_profiles = result
-                
-                if avg_growth < 0:
-                    st.warning(f"⚠️ Only **1 year** of data ({year_available}: ${salary_available:,.0f}). Using **average from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year** (declining)")
-                else:
-                    st.info(f"ℹ️ Only **1 year** of data ({year_available}: ${salary_available:,.0f}). Using **average from {num_profiles} similar profiles**: **{avg_growth*100:.1f}% per year**")
+        if num_profiles > 0:
+            if avg_growth < 0:
+                st.warning(
+                    f"📉 Only **1 year** of data ({year_available}: "
+                    f"${salary_available:,.0f}). Using **average pattern from "
+                    f"{num_profiles} similar profiles**: "
+                    f"**{avg_growth*100:.1f}% per year (declining)**."
+                )
             else:
-                st.warning(f"⚠️ Only **1 year** of data ({year_available}: ${salary_available:,.0f}). No similar profiles found - using fallback methods.")
-        elif unique_years >= 2:
-            growth_rate, growth_source = calculate_growth_rate(df, custom_job, custom_exp, custom_size)
-            years_list = sorted(profile_history['work_year'].unique())
-            salaries_list = [profile_history[profile_history['work_year']==y]['salary_in_usd'].mean() for y in years_list]
-            
-            # Show salary progression
-            salary_progression = " → ".join([f"${s:,.0f}" for s in salaries_list])
-            
-            # Show different message for negative vs positive growth
-            if growth_rate < 0:
-                st.warning(f"📉 This profile has **{unique_years} years** of data: {salary_progression}. **Declining pattern**: **{growth_rate*100:.1f}% per year** (using **{growth_source}**-level data)")
-            else:
-                st.success(f"✅ This profile has **{unique_years} years** of data: {salary_progression}. **Growth pattern**: **{growth_rate*100:.1f}% per year** (using **{growth_source}**-level data)")
+                st.info(
+                    f"ℹ️ Only **1 year** of data ({year_available}: "
+                    f"${salary_available:,.0f}). Using **average pattern from "
+                    f"{num_profiles} similar profiles**: "
+                    f"**{avg_growth*100:.1f}% per year**."
+                )
         else:
-            st.info(f"ℹ️ No historical data for this exact profile. Using fallback prediction methods.")
+            if avg_growth < 0:
+                st.warning(
+                    f"📉 Only **1 year** of data ({year_available}: "
+                    f"${salary_available:,.0f}). Using broader "
+                    f"job/experience-level trend: "
+                    f"**{avg_growth*100:.1f}% per year (declining)**."
+                )
+            else:
+                st.info(
+                    f"ℹ️ Only **1 year** of data ({year_available}: "
+                    f"${salary_available:,.0f}). Using broader "
+                    f"job/experience-level trend: "
+                    f"**{avg_growth*100:.1f}% per year**."
+                )
+    else:  # unique_years >= 2
+        growth_rate, years_list, salaries_list = calculate_growth_rate(
+            df, custom_job, custom_exp, custom_size
+        )
+        if growth_rate is not None:
+            salary_progression = " → ".join(
+                [f"${s:,.0f}" for s in salaries_list]
+            )
+            if growth_rate < 0:
+                st.warning(
+                    f"📉 This profile has **{unique_years} years** of data: "
+                    f"{salary_progression}. **Declining pattern**: "
+                    f"**{growth_rate*100:.1f}% per year** (own profile pattern)."
+                )
+            else:
+                st.success(
+                    f"✅ This profile has **{unique_years} years** of data: "
+                    f"{salary_progression}. **Growth pattern**: "
+                    f"**{growth_rate*100:.1f}% per year** (own profile pattern)."
+                )
+        else:
+            st.info(
+                "ℹ️ Multiple years of data exist, but growth pattern could not be "
+                "reliably estimated. ML model will assist in predictions."
+            )
     
     st.markdown("---")
     
@@ -505,7 +490,9 @@ with tab1:
     forecast_data = []
     
     for year in all_years:
-        salary, source = get_salary(year, custom_job, custom_exp, custom_size, prediction_method)
+        salary, source = get_salary(
+            year, custom_job, custom_exp, custom_size, prediction_method
+        )
         forecast_data.append({
             "Year": year,
             "Salary (USD)": salary,
@@ -514,53 +501,85 @@ with tab1:
     
     forecast_df = pd.DataFrame(forecast_data)
     
-    # Validate: Check for negative salaries
+    # Detect any NaN or negative salaries (just in case)
     if (forecast_df["Salary (USD)"] < 0).any():
-        st.error("⚠️ **Error**: Negative salaries detected! This profile may have insufficient data. Try selecting a different combination.")
-        negative_years = forecast_df[forecast_df["Salary (USD)"] < 0]["Year"].tolist()
-        st.warning(f"Years with negative predictions: {negative_years}")
+        st.error(
+            "⚠️ Error: Negative salaries detected! This profile may have "
+            "insufficient or unstable data."
+        )
     
-    # Debug: Show what data we have
-    actual_count = len(forecast_df[forecast_df["Source"].str.contains("Actual", na=False)])
-    predicted_count = len(forecast_df[forecast_df["Source"] == "Predicted"])
+    # Split Actual vs Predicted based on Source string
+    actual_mask = forecast_df["Source"].str.contains("Actual", na=False)
+    actual_df = forecast_df[actual_mask]
+    predicted_df = forecast_df[~actual_mask]
     
-    # Show data breakdown - only show actual years that are actually actual
-    actual_years = [y for y in forecast_df[forecast_df["Source"].str.contains("Actual", na=False)]["Year"].tolist() if y <= 2022]
-    # Predicted years are everything else
-    all_years_in_forecast = forecast_df["Year"].tolist()
-    predicted_years = [y for y in all_years_in_forecast if y not in actual_years]
+    # Show data breakdown
+    actual_years = sorted(actual_df["Year"].tolist())
+    predicted_years = sorted(predicted_df["Year"].tolist())
     
     col_info1, col_info2 = st.columns(2)
     with col_info1:
         if actual_years:
-            st.success(f"✅ **Actual Data ({len(actual_years)} years):** {', '.join(map(str, actual_years))}")
+            st.success(
+                f"✅ **Actual Data ({len(actual_years)} years):** "
+                f"{', '.join(map(str, actual_years))}"
+            )
         else:
-            st.warning("⚠️ No actual data found for this exact profile")
+            st.warning("⚠️ No exact actual data for this profile in 2020-2022.")
     with col_info2:
         if predicted_years:
-            st.info(f"🔮 **Predicted Data ({len(predicted_years)} years):** {', '.join(map(str, predicted_years[:5]))}{', ...' if len(predicted_years) > 5 else ''}")
+            preview = ", ".join(map(str, predicted_years[:5]))
+            more = ", ..." if len(predicted_years) > 5 else ""
+            st.info(
+                f"🔮 **Predicted Data ({len(predicted_years)} years):** "
+                f"{preview}{more}"
+            )
         else:
-            st.warning("⚠️ No predictions generated")
+            st.warning("⚠️ No predictions generated.")
     
-    # Calculate metrics
-    start_salary = forecast_df.iloc[0]['Salary (USD)']
-    end_salary = forecast_df.iloc[-1]['Salary (USD)']
-    salary_2025 = forecast_df[forecast_df["Year"] == 2025].iloc[0]['Salary (USD)']
-    
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        st.metric("📅 2020 Salary", f"${start_salary:,.0f}")
-    with col_b:
-        st.metric("📅 2025 Salary (Predicted)", f"${salary_2025:,.0f}")
-    with col_c:
-        growth = ((end_salary - start_salary) / start_salary) * 100
-        st.metric("📈 Total Growth (2020-2030)", f"{growth:.1f}%")
+    # Calculate metrics safely (use first non-NaN for 2020 & last for 2030)
+    safe_df = forecast_df.dropna(subset=["Salary (USD)"])
+    if not safe_df.empty:
+        # 2020
+        if 2020 in safe_df["Year"].values:
+            start_salary = float(
+                safe_df[safe_df["Year"] == 2020]["Salary (USD)"].iloc[0]
+            )
+        else:
+            start_salary = float(safe_df.iloc[0]["Salary (USD)"])
+        
+        # 2030
+        if 2030 in safe_df["Year"].values:
+            end_salary = float(
+                safe_df[safe_df["Year"] == 2030]["Salary (USD)"].iloc[0]
+            )
+        else:
+            end_salary = float(safe_df.iloc[-1]["Salary (USD)"])
+        
+        # 2025
+        if 2025 in safe_df["Year"].values:
+            salary_2025 = float(
+                safe_df[safe_df["Year"] == 2025]["Salary (USD)"].iloc[0]
+            )
+        else:
+            salary_2025 = end_salary
+        
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("📅 2020 Salary", f"${start_salary:,.0f}")
+        with col_b:
+            st.metric("📅 2025 Salary (Predicted)", f"${salary_2025:,.0f}")
+        with col_c:
+            if start_salary > 0:
+                growth = ((end_salary - start_salary) / start_salary) * 100
+                st.metric("📈 Total Growth (2020-2030)", f"{growth:.1f}%")
+            else:
+                st.metric("📈 Total Growth (2020-2030)", "N/A")
     
     # Enhanced Visualization
     fig = go.Figure()
     
     # Plot Actual Data (2020-2022)
-    actual_df = forecast_df[forecast_df["Source"].str.contains("Actual", na=False)]
     if len(actual_df) > 0:
         fig.add_trace(go.Scatter(
             x=actual_df["Year"],
@@ -574,19 +593,19 @@ with tab1:
             hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> Actual<extra></extra>'
         ))
     
-    # Plot Predicted Data (2023-2030)
-    predicted_df = forecast_df[forecast_df["Source"] == "Predicted"]
+    # Plot Predicted Data (Everything else)
     if len(predicted_df) > 0:
         fig.add_trace(go.Scatter(
             x=predicted_df["Year"],
             y=predicted_df["Salary (USD)"],
             mode='lines+markers',
-            name='ML Predictions (2023-2030)',
+            name='Predictions (Pattern / ML)',
             line=dict(color='#667eea', width=5, dash='dash'),
             marker=dict(size=14, color='#764ba2', line=dict(width=2, color='white')),
             fill='tozeroy',
             fillcolor='rgba(102, 126, 234, 0.15)',
-            hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> Predicted<extra></extra>'
+            hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> %{text}<extra></extra>',
+            text=predicted_df["Source"]
         ))
     else:
         st.warning("⚠️ No predicted data to display. Check if there's historical data for this profile.")
@@ -629,17 +648,19 @@ with tab1:
     # Show detailed table
     with st.expander("📋 View Detailed Forecast Table"):
         display_df = forecast_df.copy()
-        display_df['Salary (USD)'] = display_df['Salary (USD)'].apply(lambda x: f"${x:,.0f}")
+        display_df['Salary (USD)'] = display_df['Salary (USD)'].apply(
+            lambda x: f"${x:,.0f}" if pd.notnull(x) else "N/A"
+        )
         
-        # Add explanation for different source types
         st.caption("""
         **Data Sources:**
-        - **Actual**: Real data from dataset
-        - **Predicted (Mean of Similar)**: Only 1 year available, using average of similar job+experience combinations
-        - **Predicted (profile/job/experience/market)**: Growth-based prediction using respective level data
+        - **Actual / Actual (Single Year):** Real data from dataset
+        - **Predicted (Own Profile Pattern):** 2+ years of data for this profile, using its own growth rate
+        - **Predicted (Similar Profiles Pattern):** Only 1 year of data; using average growth from similar job+experience profiles
+        - **Predicted (Job/Experience-Level Pattern):** Using broader job/experience salary trend
+        - **Predicted (ML Only - No Profile History):** No direct history for this profile; ML model estimate
         """)
         
-        # Color code the source
         st.dataframe(
             display_df,
             use_container_width=True,
@@ -671,7 +692,11 @@ with tab2:
             text="salary_in_usd"
         )
         fig_exp.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
-        fig_exp.update_layout(showlegend=False, xaxis_title="Experience Level", yaxis_title="Avg Salary (USD)")
+        fig_exp.update_layout(
+            showlegend=False, 
+            xaxis_title="Experience Level", 
+            yaxis_title="Avg Salary (USD)"
+        )
         st.plotly_chart(fig_exp, use_container_width=True)
     
     with col2:
@@ -686,7 +711,11 @@ with tab2:
             text="salary_in_usd"
         )
         fig_size.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
-        fig_size.update_layout(showlegend=False, xaxis_title="Company Size", yaxis_title="Avg Salary (USD)")
+        fig_size.update_layout(
+            showlegend=False, 
+            xaxis_title="Company Size", 
+            yaxis_title="Avg Salary (USD)"
+        )
         st.plotly_chart(fig_size, use_container_width=True)
     
     # Top Paying Jobs
@@ -703,27 +732,34 @@ with tab2:
     # Get top jobs for selected year
     if year_selector <= 2022:
         # Use actual data
-        top_jobs = df[df['work_year'] == year_selector].groupby('job_title')['salary_in_usd'].mean().sort_values(ascending=False).head(10).reset_index()
+        top_jobs = df[df['work_year'] == year_selector].groupby(
+            'job_title'
+        )['salary_in_usd'].mean().sort_values(
+            ascending=False
+        ).head(10).reset_index()
         data_type = "Actual Data"
     else:
-        # Use predictions
+        # Use predictions based on most common exp/size for each job
         all_jobs = df['job_title'].unique()
         job_salaries = []
         
         for job in all_jobs:
             job_data = df[df['job_title'] == job]
-            # Use most common experience and company size
             most_common_exp = job_data['experience_level'].mode()[0]
             most_common_size = job_data['company_size'].mode()[0]
             
-            salary, _ = get_salary(year_selector, job, most_common_exp, most_common_size, prediction_method)
+            salary, _ = get_salary(
+                year_selector, job, most_common_exp, most_common_size, prediction_method
+            )
             job_salaries.append({
                 "job_title": job,
                 "salary_in_usd": salary
             })
         
-        top_jobs = pd.DataFrame(job_salaries).sort_values('salary_in_usd', ascending=False).head(10)
-        data_type = "ML Predictions"
+        top_jobs = pd.DataFrame(job_salaries).sort_values(
+            'salary_in_usd', ascending=False
+        ).head(10)
+        data_type = "Pattern/ML Predictions"
     
     if len(top_jobs) > 0:
         fig_top = px.bar(
@@ -754,16 +790,20 @@ with tab3:
     
     calc_year = st.slider("📅 Select Year", 2020, 2030, 2025)
     
-    # Get salary
-    salary_value, data_source = get_salary(calc_year, custom_job, custom_exp, custom_size, prediction_method)
+    # Get salary using currently selected profile from Tab 1
+    salary_value, data_source = get_salary(
+        calc_year, custom_job, custom_exp, custom_size, prediction_method
+    )
     
     st.markdown("---")
     
     # Display data source
     if "Actual" in data_source:
         st.success(f"✅ Using {data_source} from dataset")
+    elif "ML Only" in data_source:
+        st.warning(f"⚠️ {data_source} (no direct profile history)")
     else:
-        st.info(f"🔮 Using ML Model Prediction ({model_type})")
+        st.info(f"🔮 {data_source}")
     
     # Display salary
     col_x, col_y, col_z = st.columns([1, 2, 1])
@@ -787,7 +827,10 @@ with tab3:
     
     # Calculate for specific year if actual data exists
     if calc_year <= 2022:
-        market_year = df[(df["job_title"] == custom_job) & (df["work_year"] == calc_year)]["salary_in_usd"].mean()
+        market_year = df[
+            (df["job_title"] == custom_job) & 
+            (df["work_year"] == calc_year)
+        ]["salary_in_usd"].mean()
         if not np.isnan(market_year):
             market_avg = market_year
             market_label = f"Market Avg ({calc_year})"
@@ -822,8 +865,13 @@ with tab4:
             <li><b>Target Variable:</b> salary_in_usd (what we predict)</li>
             <li><b>Predictor Variables:</b> work_year, job_title, experience_level, company_size</li>
             <li><b>Training Data:</b> Actual salaries from 2020-2022</li>
-            <li><b>Predictions:</b> Model forecasts for 2023-2030 based on learned patterns</li>
-            <li><b>Model learns:</b> How year, job type, experience, and company size affect salary</li>
+            <li><b>Predictions:</b> 2023-2030 forecasts using:
+                <ul>
+                    <li>Own profile pattern (if 2+ years of data)</li>
+                    <li>Similar profiles pattern (if 1 year of data)</li>
+                    <li>ML-only estimates (if no profile history)</li>
+                </ul>
+            </li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -884,27 +932,32 @@ with tab4:
         # Get feature importance
         model_estimator = selected_model.named_steps['model']
         if hasattr(model_estimator, 'feature_importances_'):
-            # Get feature names after preprocessing
             preprocessor = selected_model.named_steps['prep']
-            
-            # Get categorical feature names
-            cat_features = []
             ohe = preprocessor.named_transformers_['cat']
-            for i, cat in enumerate(["job_title", "experience_level", "company_size"]):
-                cat_features.extend([f"{cat}_{val}" for val in ohe.categories_[i]])
             
-            # Add numeric feature
-            cat_features.append("work_year")
-            
+            # Build feature-type list (Year vs categorical groups)
             importance_df = pd.DataFrame({
-                'Feature Type': ['Year'] + ['Job Title']*len(ohe.categories_[0]) + 
-                               ['Experience']*len(ohe.categories_[1]) + 
-                               ['Company Size']*len(ohe.categories_[2]),
                 'Importance': model_estimator.feature_importances_
             })
             
-            # Group by feature type
-            importance_grouped = importance_df.groupby('Feature Type')['Importance'].sum().sort_values(ascending=False).reset_index()
+            # Number of dummy features for each category
+            n_job = len(ohe.categories_[0])
+            n_exp = len(ohe.categories_[1])
+            n_size = len(ohe.categories_[2])
+            
+            feature_types = (
+                ['Job Title'] * n_job +
+                ['Experience'] * n_exp +
+                ['Company Size'] * n_size +
+                ['Year']  # work_year passthrough
+            )
+            importance_df['Feature Type'] = feature_types
+            
+            importance_grouped = importance_df.groupby(
+                'Feature Type'
+            )['Importance'].sum().sort_values(
+                ascending=False
+            ).reset_index()
             
             fig_imp = px.bar(
                 importance_grouped,
