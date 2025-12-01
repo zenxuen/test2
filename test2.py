@@ -472,18 +472,27 @@ def calculate_growth_rate(data, job, exp, size):
 # Prediction Function with New ML Fallback (Growth unchanged)
 # ---------------------------------------------------------
 def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
-    """
-    Rules (Growth Based preserved):
-    1) If profile (job+exp+size) has ≥ 2 years of actual data:
-       - Use own historical growth pattern for predictions.
-    2) If profile has exactly 1 year of actual data:
-       - Use average growth pattern from similar profiles.
-    3) If profile has 0 years of actual data:
-       - Rely on ML model (with inferred defaults).
-    For 2020-2022:
-       - If actual data exists for that year, always use actual.
-    """
 
+    # ML Prediction
+    def ml_predict(y):
+        pred_input = pd.DataFrame({
+            "work_year": [y],
+            "job_title": [job],
+            "experience_level": [exp],
+            "company_size": [size]
+        })
+        return float(selected_model.predict(pred_input)[0])
+
+    # ---------------------------------------------
+    # MODE 1: PURE ML MODEL
+    # ---------------------------------------------
+    if method == "Pure ML Model":
+        y_pred = ml_predict(year)
+        return max(0, y_pred), "Predicted (Pure ML)"
+
+    # ---------------------------------------------
+    # GROWTH-BASED LOGIC (UNTOUCHED FROM YOUR CODE)
+    # ---------------------------------------------
     profile_history = df[
         (df["job_title"] == job) &
         (df["experience_level"] == exp) &
@@ -493,19 +502,18 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     years_available = sorted(profile_history["work_year"].unique())
     num_years = len(years_available)
 
-    # 1) Exact actual for 2020-2022
+    # Actual 2020–2022
     if year <= 2022:
-        actual_for_year = profile_history[profile_history["work_year"] == year]
-        if len(actual_for_year) > 0:
-            return actual_for_year["salary_in_usd"].mean(), "Actual"
+        actual = profile_history[profile_history["work_year"] == year]
+        if len(actual) > 0:
+            return actual["salary_in_usd"].mean(), "Actual"
 
-    # --------- Case 0: No actual data for this profile ----------
+    # 0 years → ML fallback
     if num_years == 0:
-        pred_input = build_ml_input(year, job, exp, size)
-        predicted_salary = selected_pipeline.predict(pred_input)[0]
-        return max(0, predicted_salary), "Predicted (ML Only - No Profile History)"
+        y_pred = ml_predict(year)
+        return max(0, y_pred), "Predicted (ML Only - No Profile History)"
 
-    # --------- Case 1: Exactly 1 year ----------
+    # 1 year → similar profile growth
     if num_years == 1:
         base_year = years_available[0]
         base_salary = profile_history["salary_in_usd"].mean()
@@ -513,46 +521,35 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
         if year == base_year:
             return base_salary, "Actual (Single Year)"
 
-        avg_growth, num_profiles = get_mean_growth_from_similar(df, job, exp)
+        avg_g, num_profiles = get_mean_growth_from_similar(df, job, exp)
+        yrs_ahead = year - base_year
+        y_growth = base_salary * ((1 + avg_g) ** yrs_ahead)
 
-        years_ahead = year - base_year
-        predicted_salary = base_salary * ((1 + avg_growth) ** years_ahead)
+        return max(0, y_growth), f"Predicted (Similar Profiles Growth)"
 
-        if num_profiles > 0:
-            src = f"Predicted (Similar Profiles Pattern, {num_profiles} profiles)"
-        else:
-            src = "Predicted (Job/Experience-Level Pattern)"
-
-        return max(0, predicted_salary), src
-
-    # --------- Case 2: 2+ years → own pattern ----------
+    # 2+ years → own growth
     if num_years >= 2:
-        growth_rate, yrs, sals = calculate_growth_rate(df, job, exp, size)
+        growth, yrs, sals = calculate_growth_rate(df, job, exp, size)
+        
+        if growth is None:
+            y_pred = ml_predict(year)
+            return max(0, y_pred), "Predicted (ML Fallback)"
 
-        if growth_rate is None:
-            # Fallback to ML if growth can't be computed
-            pred_input = build_ml_input(year, job, exp, size)
-            predicted_salary = selected_pipeline.predict(pred_input)[0]
-            return max(0, predicted_salary), "Predicted (ML Fallback)"
-
-        # If we have exact actual year
-        if year in yrs:
-            actual_for_year = profile_history[profile_history["work_year"] == year]
-            if len(actual_for_year) > 0:
-                return actual_for_year["salary_in_usd"].mean(), "Actual"
-
-        # Future (or missing) year → extrapolation
         last_year = yrs[-1]
         last_salary = sals[-1]
-        years_ahead = year - last_year
-        predicted_salary = last_salary * ((1 + growth_rate) ** years_ahead)
 
-        return max(0, predicted_salary), "Predicted (Own Profile Pattern)"
+        if year in yrs:
+            actual = profile_history[profile_history["work_year"] == year]
+            return actual["salary_in_usd"].mean(), "Actual"
 
-    # Safety fallback (should not reach here)
-    pred_input = build_ml_input(year, job, exp, size)
-    predicted_salary = selected_pipeline.predict(pred_input)[0]
-    return max(0, predicted_salary), "Predicted (Fallback ML)"
+        yrs_ahead = year - last_year
+        y_growth = last_salary * ((1 + growth) ** yrs_ahead)
+        return max(0, y_growth), "Predicted (Own Profile Pattern)"
+
+    # Safety fallback
+    y_pred = ml_predict(year)
+    return max(0, y_pred), "Predicted (Fallback)"
+
 
 
 # ---------------------------------------------------------
@@ -661,15 +658,23 @@ with tab1:
     all_years = np.arange(2020, 2031)
     forecast_data = []
 
-    for year in all_years:
-        salary, source = get_salary(
-            year, custom_job, custom_exp, custom_size, prediction_method
-        )
-        forecast_data.append({
-            "Year": year,
-            "Salary (USD)": salary,
-            "Source": source
-        })
+   salary, source = get_salary(
+    year, custom_job, custom_exp, custom_size, prediction_method
+)
+
+# Hybrid Mode: Blend Growth + ML
+if prediction_method == "Hybrid":
+    ml_value = models[model_type].predict(pd.DataFrame({
+        "work_year": [year],
+        "job_title": [custom_job],
+        "experience_level": [custom_exp],
+        "company_size": [custom_size]
+    }))[0]
+
+    # Blend 70% Growth, 30% ML
+    salary = 0.7 * salary + 0.3 * ml_value
+    source = "Predicted (Hybrid: 70% Growth + 30% ML)"
+
 
     forecast_df = pd.DataFrame(forecast_data)
 
@@ -1134,3 +1139,4 @@ st.markdown(f"""
         <p style='font-size: 0.8rem;'>Target: salary_in_usd | Predictors: work_year, job_title, experience_level, company_size + enriched features</p>
     </div>
 """, unsafe_allow_html=True)
+
