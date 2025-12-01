@@ -25,7 +25,7 @@ st.title("🛡️ Cybersecurity Salary Forecast — ML Model (2020–2030)")
 # -------------------------------------------------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("salary_dataset.csv")     # ← replace with your name
+    df = pd.read_csv("salaries_cyber_clean.csv")     # ← replace with your name
     return df
 
 df = load_data()
@@ -221,3 +221,4 @@ fig2.update_layout(
 )
 
 st.plotly_chart(fig2, use_container_width=True)
+
