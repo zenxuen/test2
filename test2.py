@@ -1,225 +1,261 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
-# -------------------------------------------------
-# Page Config
-# -------------------------------------------------
+import plotly.graph_objects as go
+
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 st.set_page_config(
-    page_title="Cybersecurity Salary Forecast (2020–2030)",
-    page_icon="🛡️",
-    layout="wide"
+    page_title="Cybersecurity Salary Forecast — ML Model (2020–2030)",
+    layout="wide",
+    page_icon="🛡️"
 )
 
-st.title("🛡️ Cybersecurity Salary Forecast — ML Model (2020–2030)")
+st.markdown("""
+<style>
+h1 {
+    font-size: 2.4rem !important;
+    font-weight: 700;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# -------------------------------------------------
-# Load dataset
-# -------------------------------------------------
+# =========================================================
+# LOAD DATA
+# =========================================================
 @st.cache_data
 def load_data():
-    df = pd.read_csv("salaries_cyber_clean.csv")     # ← replace with your name
+    df = pd.read_csv("salaries_cyber_clean.csv")
     return df
 
 df = load_data()
 
-# -------------------------------------------------
-# Filter only profiles that actually exist
-# -------------------------------------------------
-def get_valid_profiles(df):
-    combo = df.groupby([
+# =========================================================
+# FILTER ONLY PROFILES WITH ACTUAL 2020–2022 DATA
+# =========================================================
+actual_df = df[df["work_year"].isin([2020, 2021, 2022])]
+
+valid_profiles_df = (
+    actual_df.groupby([
         "job_title",
         "experience_level",
         "employment_type",
         "company_size",
         "company_location"
-    ]).size().reset_index()
+    ])
+    .size()
+    .reset_index()
+)
 
-    return combo
+# =========================================================
+# SIDEBAR — PROFILE SELECTION
+# =========================================================
+st.sidebar.header("Select Profile for Prediction")
 
-valid_profiles_df = get_valid_profiles(df)
+job_title = st.sidebar.selectbox("Job Title", sorted(valid_profiles_df["job_title"].unique()))
+exp_level = st.sidebar.selectbox("Experience Level", sorted(valid_profiles_df["experience_level"].unique()))
+emp_type = st.sidebar.selectbox("Employment Type", sorted(valid_profiles_df["employment_type"].unique()))
+company_size = st.sidebar.selectbox("Company Size", sorted(valid_profiles_df["company_size"].unique()))
+company_loc = st.sidebar.selectbox("Company Location", sorted(valid_profiles_df["company_location"].unique()))
 
-# Sidebar selectors
-st.sidebar.header("🔎 Select Profile")
+model_choice = st.sidebar.selectbox(
+    "Model",
+    ["Linear Regression", "Random Forest", "Gradient Boosting"]
+)
 
-job = st.sidebar.selectbox("Job Title", sorted(valid_profiles_df["job_title"].unique()))
-exp = st.sidebar.selectbox("Experience Level", sorted(valid_profiles_df["experience_level"].unique()))
-emp = st.sidebar.selectbox("Employment Type", sorted(valid_profiles_df["employment_type"].unique()))
-size = st.sidebar.selectbox("Company Size", sorted(valid_profiles_df["company_size"].unique()))
-loc = st.sidebar.selectbox("Company Location", sorted(valid_profiles_df["company_location"].unique()))
-
-# Filter dataset for this profile
-profile_df = df[
-    (df["job_title"] == job) &
-    (df["experience_level"] == exp) &
-    (df["employment_type"] == emp) &
-    (df["company_size"] == size) &
-    (df["company_location"] == loc)
-]
-
-if profile_df.empty:
-    st.error("This profile has no actual data in your dataset. It should not happen because we filtered it out.")
-    st.stop()
-
-# -------------------------------------------------
-# Train ML Model (Random Forest)
-# -------------------------------------------------
-
-FEATURES = ["job_title", "experience_level", "employment_type",
-            "company_size", "company_location", "work_year"]
+# =========================================================
+# TARGET + FEATURES
+# =========================================================
+FEATURES = ["work_year", "job_title", "experience_level", "employment_type",
+            "company_size", "company_location"]
 
 TARGET = "salary_in_usd"
 
-X = df[FEATURES]
-y = df[TARGET]
+# =========================================================
+# TRAIN ML MODELS
+# =========================================================
+@st.cache_resource
+def train_models(df):
 
-categorical_cols = ["job_title", "experience_level", "employment_type",
-                    "company_size", "company_location"]
+    X = df[FEATURES]
+    y = df[TARGET]
 
-preprocessor = ColumnTransformer(
-    transformers=[
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
-        ("num", "passthrough", ["work_year"])
-    ]
-)
+    cat_cols = ["job_title", "experience_level", "employment_type",
+                "company_size", "company_location"]
 
-model = Pipeline(steps=[
-    ("prep", preprocessor),
-    ("model", RandomForestRegressor(
-        n_estimators=300,
-        random_state=42,
-        max_depth=None
-    ))
-])
+    preprocess = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)
+        ],
+        remainder="passthrough"
+    )
 
-model.fit(X, y)
+    models = {
+        "Linear Regression": LinearRegression(),
+        "Random Forest": RandomForestRegressor(
+            n_estimators=200,
+            random_state=42
+        ),
+        "Gradient Boosting": GradientBoostingRegressor(
+            n_estimators=200,
+            learning_rate=0.1,
+            random_state=42
+        )
+    }
 
-# -------------------------------------------------
-# Build Forecast Table
-# -------------------------------------------------
+    trained = {}
+    for name, est in models.items():
+        pipe = Pipeline([
+            ("prep", preprocess),
+            ("model", est)
+        ])
+        pipe.fit(X, y)
+        trained[name] = pipe
 
-def predict_salary_for_year(year):
-    data = pd.DataFrame([{
-        "job_title": job,
-        "experience_level": exp,
-        "employment_type": emp,
-        "company_size": size,
-        "company_location": loc,
-        "work_year": year
+    return trained
+
+trained_models = train_models(df)
+model = trained_models[model_choice]
+
+# =========================================================
+# FORECAST FUNCTION (PURE ML)
+# =========================================================
+def predict_salary(year):
+    profile = pd.DataFrame([{
+        "work_year": year,
+        "job_title": job_title,
+        "experience_level": exp_level,
+        "employment_type": emp_type,
+        "company_size": company_size,
+        "company_location": company_loc
     }])
 
-    pred = model.predict(data)[0]
-    return round(pred, 2)
+    predicted = model.predict(profile)[0]
+    return max(0, predicted)
 
+# =========================================================
+# CHECK IF PROFILE HAS ACTUAL DATA
+# =========================================================
+profile_actual = actual_df[
+    (actual_df["job_title"] == job_title) &
+    (actual_df["experience_level"] == exp_level) &
+    (actual_df["employment_type"] == emp_type) &
+    (actual_df["company_size"] == company_size) &
+    (actual_df["company_location"] == company_loc)
+]
+
+# =========================================================
+# PAGE TITLE
+# =========================================================
+st.markdown("# 🛡️ Cybersecurity Salary Forecast — ML Model (2020–2030)")
+
+# If somehow no data exists (should not happen due to filtering)
+if profile_actual.empty:
+    st.error("This profile has **no actual data** in 2020–2022. (This should not happen.)")
+    st.stop()
+
+# =========================================================
+# BUILD FORECAST TABLE
+# =========================================================
+years = list(range(2020, 2031))
 forecast_rows = []
 
-# Actual years: 2020–2022
-for yr in [2020, 2021, 2022]:
-    subset = profile_df[profile_df["work_year"] == yr]
+for yr in years:
 
-    if subset.empty:
-        forecast_rows.append({
-            "year": yr,
-            "salary": None,
-            "source": "No Data"
-        })
+    # 2020–2022 → use actual data
+    if yr in [2020, 2021, 2022]:
+        actual_row = profile_actual[profile_actual["work_year"] == yr]
+
+        if not actual_row.empty:
+            salary = actual_row["salary_in_usd"].mean()
+            source = "Actual"
+        else:
+            salary = None
+            source = "No Data"
+
     else:
-        avg = subset["salary_in_usd"].mean()
-        forecast_rows.append({
-            "year": yr,
-            "salary": round(avg, 2),
-            "source": "Actual"
-        })
+        # 2023–2030 → always ML
+        salary = predict_salary(yr)
+        source = "ML Predicted"
 
-# Predicted years 2023–2030
-for yr in range(2023, 2030 + 1):
     forecast_rows.append({
         "year": yr,
-        "salary": predict_salary_for_year(yr),
-        "source": "Predicted"
+        "salary": salary,
+        "source": source
     })
 
 forecast_df = pd.DataFrame(forecast_rows)
 
-# -------------------------------------------------
-# Display Table
-# -------------------------------------------------
-st.subheader("📘 Salary Forecast Table (2020–2030)")
-st.dataframe(forecast_df, use_container_width=True)
+# =========================================================
+# WARNING IF MISSING ACTUAL YEARS
+# =========================================================
+missing_actual = forecast_df[
+    (forecast_df["year"].isin([2020, 2021, 2022])) &
+    (forecast_df["source"] == "No Data")
+]
 
-# -------------------------------------------------
-# Plot Trend (Plotly)
-# -------------------------------------------------
-st.subheader("📈 Salary Trend Chart")
+if len(missing_actual) > 0:
+    st.warning("⚠️ Some actual years (2020–2022) are missing for this profile.")
 
+# =========================================================
+# PLOT — Actual + Predicted
+# =========================================================
 fig = go.Figure()
 
-# Actual points
+# Actual
+actual_pts = forecast_df[forecast_df["source"] == "Actual"]
 fig.add_trace(go.Scatter(
-    x=forecast_df[forecast_df["source"] == "Actual"]["year"],
-    y=forecast_df[forecast_df["source"] == "Actual"]["salary"],
-    mode="markers+lines",
-    name="Actual",
-    line=dict(color="green", width=3)
+    x=actual_pts["year"],
+    y=actual_pts["salary"],
+    mode="lines+markers",
+    name="Actual (2020–2022)",
+    line=dict(color="cyan", width=4),
+    marker=dict(size=10)
 ))
 
-# Predicted points
+# Predicted
+pred_pts = forecast_df[forecast_df["source"] == "ML Predicted"]
 fig.add_trace(go.Scatter(
-    x=forecast_df[forecast_df["source"] == "Predicted"]["year"],
-    y=forecast_df[forecast_df["source"] == "Predicted"]["salary"],
-    mode="markers+lines",
-    name="Predicted",
-    line=dict(color="blue", width=3, dash="dash")
+    x=pred_pts["year"],
+    y=pred_pts["salary"],
+    mode="lines+markers",
+    name="ML Predicted",
+    line=dict(color="orange", width=4, dash="dash"),
+    marker=dict(size=10)
+))
+
+# No-data markers
+none_pts = forecast_df[forecast_df["source"] == "No Data"]
+fig.add_trace(go.Scatter(
+    x=none_pts["year"],
+    y=none_pts["salary"],
+    mode="markers",
+    name="No Data",
+    marker=dict(color="gray", size=12, symbol="x")
 ))
 
 fig.update_layout(
     height=500,
     xaxis_title="Year",
     yaxis_title="Salary (USD)",
-    legend_title="Source"
+    title=f"Salary Forecast (2020–2030)",
+    template="plotly_dark",
+    legend=dict(orientation="h", y=1.1)
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
-# -------------------------------------------------
-# Feature Importance
-# -------------------------------------------------
-
-st.subheader("🛠 Feature Importance (Random Forest)")
-
-rf_model = model.named_steps["model"]
-prep = model.named_steps["prep"]
-
-# Get feature names from encoder
-encoded_cols = list(prep.named_transformers_["cat"].get_feature_names_out(categorical_cols))
-final_features = encoded_cols + ["work_year"]
-
-importances = rf_model.feature_importances_
-
-imp_df = pd.DataFrame({
-    "feature": final_features,
-    "importance": importances
-}).sort_values("importance", ascending=False)
-
-fig2 = go.Figure(go.Bar(
-    x=imp_df["importance"],
-    y=imp_df["feature"],
-    orientation="h"
-))
-
-fig2.update_layout(
-    height=600,
-    xaxis_title="Importance Score",
-    yaxis_title="Feature"
-)
-
-st.plotly_chart(fig2, use_container_width=True)
-
-
+# =========================================================
+# SHOW TABLE
+# =========================================================
+st.markdown("## Forecast Data")
+st.dataframe(forecast_df, height=400)
