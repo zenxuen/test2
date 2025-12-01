@@ -7,6 +7,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.pipeline import Pipeline
 
+from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
@@ -17,18 +18,13 @@ import plotly.express as px
 # PAGE CONFIG
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Cybersecurity Salary Forecast (ML)",
+    page_title="Cybersecurity Salary Forecast (Hybrid ML)",
     page_icon="💼",
     layout="wide",
 )
 
 st.markdown(
-    "<h1 style='font-size:2.6rem;'>2020–2022: Actual Data | 2023–2030: ML Predictions</h1>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "Target: <b>salary_in_usd</b> • Features: <b>work_year, job_title, "
-    "experience_level, employment_type, company_size</b>",
+    "<h1 style='font-size:2.5rem;'>2020–2022 Actual | 2023–2030 Hybrid ML Predictions</h1>",
     unsafe_allow_html=True,
 )
 
@@ -42,7 +38,6 @@ def load_data():
 
 df = load_data()
 
-# Keep only required columns
 df = df[[
     "salary_in_usd",
     "work_year",
@@ -53,158 +48,150 @@ df = df[[
 ]].dropna()
 
 # ---------------------------------------------------------
-# SIDEBAR – MODEL SETTINGS
+# SIDEBAR SETTINGS
 # ---------------------------------------------------------
-st.sidebar.header("⚙️ Model Settings")
+st.sidebar.header("⚙️ Hybrid Model Settings")
 
 model_choice = st.sidebar.selectbox(
-    "Choose ML Model",
+    "Choose Profile Model",
     ["Random Forest", "Gradient Boosting"]
 )
 
 # ---------------------------------------------------------
-# TRAIN MODELS (work_year INCLUDED)
+# TRAIN MODEL 1 — TIME TREND (Linear Regression)
 # ---------------------------------------------------------
 @st.cache_resource
-def train_models(data: pd.DataFrame):
-    X = data[["work_year", "job_title", "experience_level",
-              "employment_type", "company_size"]]
-    y = data["salary_in_usd"]
+def train_time_model(df):
+    time_df = df[["work_year", "salary_in_usd"]]
+
+    X = time_df[["work_year"]]
+    y = time_df["salary_in_usd"]
+
+    lr = LinearRegression()
+    lr.fit(X, y)
+
+    return lr
+
+time_model = train_time_model(df)
+
+# ---------------------------------------------------------
+# TRAIN MODEL 2 — PROFILE MODEL (RF / GB)
+# ---------------------------------------------------------
+@st.cache_resource
+def train_profile_model(df):
+
+    X = df[["job_title", "experience_level", "employment_type", "company_size"]]
+    y = df["salary_in_usd"]
 
     categorical_cols = ["job_title", "experience_level",
                         "employment_type", "company_size"]
 
-    preprocessor = ColumnTransformer(
+    preproc = ColumnTransformer(
         transformers=[
             ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
-        ],
-        remainder="passthrough"   # keeps work_year as numeric
+        ]
     )
 
-    models = {
-        "Random Forest": RandomForestRegressor(
-            n_estimators=200,
+    if model_choice == "Random Forest":
+        model = RandomForestRegressor(
+            n_estimators=250,
             random_state=42,
             max_depth=None,
-            min_samples_split=4,
-            min_samples_leaf=2,
+            min_samples_split=3,
             n_jobs=-1
-        ),
-        "Gradient Boosting": GradientBoostingRegressor(
-            n_estimators=200,
+        )
+    else:
+        model = GradientBoostingRegressor(
+            n_estimators=250,
             learning_rate=0.05,
             max_depth=3,
             random_state=42
         )
-    }
 
-    trained = {}
-    metrics = {}
+    pipe = Pipeline([
+        ("prep", preproc),
+        ("model", model)
+    ])
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
 
-    for name, model in models.items():
-        pipe = Pipeline([
-            ("prep", preprocessor),
-            ("model", model)
-        ])
+    pipe.fit(X_train, y_train)
+    y_pred = pipe.predict(X_test)
 
-        pipe.fit(X_train, y_train)
-        y_pred = pipe.predict(X_test)
+    cv = cross_val_score(pipe, X_train, y_train, cv=5, scoring="r2")
 
-        cv_scores = cross_val_score(
-            pipe, X_train, y_train, cv=5, scoring="r2"
-        )
+    metrics = {
+        "R²": r2_score(y_test, y_pred),
+        "MAE": mean_absolute_error(y_test, y_pred),
+        "RMSE": np.sqrt(mean_squared_error(y_test, y_pred)),
+        "CV Mean": cv.mean(),
+        "CV Std": cv.std()
+    }
 
-        trained[name] = pipe
-        metrics[name] = {
-            "R²": r2_score(y_test, y_pred),
-            "MAE": mean_absolute_error(y_test, y_pred),
-            "RMSE": np.sqrt(mean_squared_error(y_test, y_pred)),
-            "CV Mean": cv_scores.mean(),
-            "CV Std": cv_scores.std()
-        }
+    return pipe, metrics
 
-    return trained, metrics
 
-models, perf = train_models(df)
-selected_model = models[model_choice]
+profile_model, profile_metrics = train_profile_model(df)
 
 # ---------------------------------------------------------
-# SIDEBAR – METRICS
-# ---------------------------------------------------------
-st.sidebar.subheader("📈 Model Performance")
-
-m = perf[model_choice]
-st.sidebar.metric("R²", f"{m['R²']:.3f}")
-st.sidebar.metric("MAE", f"${m['MAE']:,.0f}")
-st.sidebar.metric("RMSE", f"${m['RMSE']:,.0f}")
-st.sidebar.caption(f"CV R² = {m['CV Mean']:.3f} ± {m['CV Std']:.3f}")
-
-# ---------------------------------------------------------
-# USER PROFILE INPUT
+# PROFILE INPUT
 # ---------------------------------------------------------
 st.subheader("🎯 Your Profile")
 
 c1, c2, c3, c4 = st.columns(4)
 
-with c1:
-    job = st.selectbox("Job Title", sorted(df["job_title"].unique()))
-with c2:
-    exp = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
-with c3:
-    emp = st.selectbox("Employment Type", sorted(df["employment_type"].unique()))
-with c4:
-    size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
+job = c1.selectbox("Job Title", sorted(df["job_title"].unique()))
+exp = c2.selectbox("Experience Level", sorted(df["experience_level"].unique()))
+emp = c3.selectbox("Employment Type", sorted(df["employment_type"].unique()))
+size = c4.selectbox("Company Size", sorted(df["company_size"].unique()))
 
-profile_base = {
+profile = {
     "job_title": job,
     "experience_level": exp,
     "employment_type": emp,
-    "company_size": size,
+    "company_size": size
 }
 
 # ---------------------------------------------------------
-# BUILD 2020–2030 FORECAST
+# GENERATE FORECAST (Hybrid)
 # ---------------------------------------------------------
-years = list(range(2020, 2030 + 1))
+years = list(range(2020, 2031))
 records = []
 
 for year in years:
-    # try actual data first for 2020–2022
+    # 1. TIME TREND
+    trend_value = time_model.predict([[year]])[0]
+
+    # 2. PROFILE BASELINE
+    profile_value = profile_model.predict(pd.DataFrame([profile]))[0]
+
+    # Final Salary Prediction
+    salary_pred = trend_value + (profile_value - df["salary_in_usd"].mean())
+
+    # For 2020–2022, try actual
     if year <= 2022:
-        subset = df[
+        act = df[
             (df["work_year"] == year) &
             (df["job_title"] == job) &
             (df["experience_level"] == exp) &
             (df["employment_type"] == emp) &
             (df["company_size"] == size)
         ]
-
-        if len(subset) > 0:
-            salary = subset["salary_in_usd"].mean()
+        if len(act) > 0:
+            final_salary = act["salary_in_usd"].mean()
             source = "Actual"
         else:
-            X_row = pd.DataFrame([{
-                "work_year": year,
-                **profile_base
-            }])
-            salary = selected_model.predict(X_row)[0]
-            source = "Predicted (ML – no actual for this year/profile)"
+            final_salary = salary_pred
+            source = "Predicted (Hybrid)"
     else:
-        # future years: ML forecast
-        X_row = pd.DataFrame([{
-            "work_year": year,
-            **profile_base
-        }])
-        salary = selected_model.predict(X_row)[0]
-        source = "Predicted (ML)"
+        final_salary = salary_pred
+        source = "Predicted (Hybrid)"
 
     records.append({
         "Year": year,
-        "Salary (USD)": salary,
+        "Salary": final_salary,
         "Source": source
     })
 
@@ -214,85 +201,61 @@ forecast_df = pd.DataFrame(records)
 # SUMMARY METRICS
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("📅 Salary Forecast: 2020 → 2030")
+st.subheader("📅 Salary Forecast Summary (2020–2030)")
 
-start_salary = forecast_df.loc[forecast_df["Year"] == 2020, "Salary (USD)"].iloc[0]
-mid_salary = forecast_df.loc[forecast_df["Year"] == 2025, "Salary (USD)"].iloc[0]
-end_salary = forecast_df.loc[forecast_df["Year"] == 2030, "Salary (USD)"].iloc[0]
+start = forecast_df.loc[forecast_df.Year == 2020, "Salary"].iloc[0]
+mid = forecast_df.loc[forecast_df.Year == 2025, "Salary"].iloc[0]
+end = forecast_df.loc[forecast_df.Year == 2030, "Salary"].iloc[0]
 
-total_growth_pct = ((end_salary - start_salary) / start_salary) * 100 if start_salary > 0 else 0
+growth = ((end - start) / start) * 100
 
 m1, m2, m3 = st.columns(3)
-with m1:
-    st.metric("2020", f"${start_salary:,.0f}")
-with m2:
-    st.metric("2025 (Predicted)", f"${mid_salary:,.0f}")
-with m3:
-    st.metric("Total Growth 2020–2030", f"{total_growth_pct:.1f}%")
+m1.metric("2020", f"${start:,.0f}")
+m2.metric("2025 (Hybrid)", f"${mid:,.0f}")
+m3.metric("Total Growth 2020–2030", f"{growth:.1f}%")
 
 # ---------------------------------------------------------
-# LINE CHART: ACTUAL vs PREDICTED
+# PLOT
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("📈 Salary Trend (2020–2030)")
+st.subheader("📈 Hybrid Salary Forecast (2020–2030)")
 
-actual_df = forecast_df[forecast_df["Source"] == "Actual"]
-pred_df = forecast_df[forecast_df["Source"] != "Actual"]
+act = forecast_df[forecast_df.Source == "Actual"]
+pred = forecast_df[forecast_df.Source != "Actual"]
 
 fig = go.Figure()
 
-if not actual_df.empty:
+if not act.empty:
     fig.add_trace(go.Scatter(
-        x=actual_df["Year"],
-        y=actual_df["Salary (USD)"],
+        x=act["Year"],
+        y=act["Salary"],
+        name="Actual",
         mode="lines+markers",
-        name="Actual (2020–2022)",
-        line=dict(color="green", width=4),
-        marker=dict(size=10)
+        line=dict(color="green", width=4)
     ))
 
-if not pred_df.empty:
-    fig.add_trace(go.Scatter(
-        x=pred_df["Year"],
-        y=pred_df["Salary (USD)"],
-        mode="lines+markers",
-        name="Predicted (2023–2030 / gaps)",
-        line=dict(color="purple", width=4, dash="dot"),
-        marker=dict(size=10)
-    ))
+fig.add_trace(go.Scatter(
+    x=pred["Year"],
+    y=pred["Salary"],
+    name="Hybrid Predicted",
+    mode="lines+markers",
+    line=dict(color="purple", width=3, dash="dot")
+))
 
 fig.update_layout(
     xaxis_title="Year",
     yaxis_title="Salary (USD)",
-    template="plotly_white",
-    height=550,
-    hovermode="x unified"
+    template="plotly_dark",
+    height=550
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# TABLE VIEW
-# ---------------------------------------------------------
-with st.expander("📋 Detailed Forecast Table"):
-    df_display = forecast_df.copy()
-    df_display["Salary (USD)"] = df_display["Salary (USD)"].map(lambda x: f"${x:,.0f}")
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-# ---------------------------------------------------------
-# SIMPLE EDA (OPTIONAL)
+# TABLE
 # ---------------------------------------------------------
 st.markdown("---")
-st.subheader("📊 Overall Average Salary by Year (All Profiles)")
-
-year_avg = df.groupby("work_year")["salary_in_usd"].mean().reset_index()
-
-fig2 = px.line(
-    year_avg,
-    x="work_year",
-    y="salary_in_usd",
-    markers=True,
-    title="Average Salary by Year (Dataset 2020–2022)"
-)
-fig2.update_layout(xaxis_title="Year", yaxis_title="Avg Salary (USD)")
-st.plotly_chart(fig2, use_container_width=True)
+with st.expander("📋 Forecast Data Table"):
+    df_show = forecast_df.copy()
+    df_show["Salary"] = df_show["Salary"].map(lambda x: f"${x:,.0f}")
+    st.dataframe(df_show, hide_index=True, use_container_width=True)
