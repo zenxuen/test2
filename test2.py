@@ -30,7 +30,7 @@ st.markdown("<h1 class='main-header'>Cybersecurity Salary Prediction (Pure ML)</
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("df.csv")
+    df = pd.read_csv("salaries_cyber_clean.csv")
 
     # Clean columns
     df.columns = df.columns.str.strip()
@@ -289,4 +289,5 @@ if hasattr(model, "feature_importances_"):
 
 else:
     st.info("Feature importance is only available for Random Forest and Gradient Boosting.")
+
 
