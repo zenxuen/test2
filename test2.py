@@ -28,7 +28,7 @@ def load_data():
 df = load_data()
 
 # =========================================================
-# TRAIN ML MODEL (Predict salary_usd)
+# TRAIN ML MODEL (Predict salary_in_usd)
 # =========================================================
 feature_cols = [
     "experience_level",
@@ -180,3 +180,4 @@ st.line_chart(chart_df, x="year", y="pred_salary", height=380)
 # Show raw data
 with st.expander("📄 Raw Prediction Data"):
     st.write(chart_df)
+
