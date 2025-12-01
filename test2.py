@@ -342,7 +342,7 @@ def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     # RULE 2 — Profile has only 1 actual year
     # ------------------------------------------------------
     if num_years == 1:
-        avg_growth, _ = get_mean_prediction_from_similar(df, job, exp)
+        avg_growth, _ = get_mean_growth_from_similar(df, job, exp)
 
         base_salary = profile_history["salary_in_usd"].mean()
         base_year = profile_history["work_year"].iloc[0]
@@ -977,4 +977,5 @@ st.markdown(f"""
         <p style='font-size: 0.8rem;'>Target: salary_in_usd | Predictors: work_year, job_title, experience_level, company_size</p>
     </div>
 """, unsafe_allow_html=True)
+
 
