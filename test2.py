@@ -364,10 +364,10 @@ with tab2:
 with tab3:
     st.subheader("🛠 Feature Importance")
 
-    # Retrieve the true pipeline (not the wrong dictionary)
-    pipeline = trained_models[model_type]
+    # Retrieve the pipeline from the correct dictionary
+    pipeline = models[model_type]  # <-- FIXED
 
-    # Safely detect steps
+    # Safely detect pipeline steps
     if "prep" in pipeline.named_steps:
         prep_obj = pipeline.named_steps["prep"]
         model_obj = pipeline.named_steps["model"]
@@ -376,8 +376,10 @@ with tab3:
         prep_obj = None
         model_obj = None
 
+    # Only models with feature_importances_ qualify
     if model_obj is not None and hasattr(model_obj, "feature_importances_"):
 
+        # Extract OHE categories
         ohe = prep_obj.named_transformers_["cat"]
         encoded_features = (
             list(ohe.get_feature_names_out(["job_title", "experience_level", "company_size"])) +
@@ -387,10 +389,11 @@ with tab3:
         fi_df = pd.DataFrame({
             "Feature": encoded_features,
             "Importance": model_obj.feature_importances_
-        }).sort_values(by="Importance", ascending=False)
+        }).sort_values("Importance", ascending=False)
 
-        st.dataframe(fi_df)
+        st.dataframe(fi_df, width="stretch", hide_index=True)
 
+        # Summarize importance by category
         fi_df["Category"] = fi_df["Feature"].apply(
             lambda x: (
                 "Job Title" if x.startswith("job_title") else
@@ -413,7 +416,7 @@ with tab3:
         st.plotly_chart(fig_imp, width="stretch")
 
     else:
-        st.info("ℹ️ Feature importance is only supported for Random Forest & Gradient Boosting (and when pipeline is intact).")
+        st.info("ℹ️ Feature importance is available only for Random Forest / Gradient Boosting.")
 
 
 # =========================================================
@@ -443,4 +446,5 @@ st.markdown("""
     <p>Powered by Streamlit · Machine Learning · Salary Intelligence Engine</p>
 </div>
 """, unsafe_allow_html=True)
+
 
