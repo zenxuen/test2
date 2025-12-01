@@ -49,8 +49,82 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<h1 class="main-header">💼 Cybersecurity Salary Prediction Dashboard</h1>', unsafe_allow_html=True)
-st.markdown("*Actual Data: 2020-2022 | ML Predictions: 2023-2030*")
-st.markdown("**Target:** Salary | **Predictors:** Year, Job Title, Experience, Company Size")
+st.markdown("*Actual Data: 2020-2022 | Growth-Based & ML Predictions: 2023-2030*")
+st.markdown("**Target:** salary_in_usd | **Predictors:** work_year, job_title, experience_level, company_size + extra features")
+
+# ---------------------------------------------------------
+# Helper: Region + Seniority Engineering
+# ---------------------------------------------------------
+def infer_region(country_code: str) -> str:
+    """Map country code to a coarse region for better ML signal."""
+    if not isinstance(country_code, str):
+        return "Other"
+
+    cc = country_code.upper()
+
+    north_america = {"US", "CA"}
+    europe = {
+        "GB", "UK", "DE", "FR", "NL", "ES", "IT", "SE", "CH",
+        "IE", "DK", "NO", "FI", "BE", "AT", "PT", "PL"
+    }
+    asia = {
+        "IN", "SG", "JP", "CN", "HK", "KR", "MY", "PH", "ID",
+        "TH", "VN", "TW"
+    }
+    oceania = {"AU", "NZ"}
+    latin_america = {"BR", "AR", "MX", "CL", "CO", "PE"}
+
+    if cc in north_america:
+        return "North America"
+    if cc in europe:
+        return "Europe"
+    if cc in asia:
+        return "Asia"
+    if cc in oceania:
+        return "Oceania"
+    if cc in latin_america:
+        return "Latin America"
+    return "Other"
+
+
+def infer_seniority(job_title: str) -> int:
+    """Create a rough numeric seniority level from job_title."""
+    if not isinstance(job_title, str):
+        return 2
+    jt = job_title.lower()
+    if any(k in jt for k in ["principal", "head", "director", "lead", "vp", "chief"]):
+        return 4
+    if any(k in jt for k in ["sr", "senior"]):
+        return 3
+    if any(k in jt for k in ["jr", "junior", "entry"]):
+        return 1
+    return 2  # mid / default
+
+
+def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add region_company + seniority_level columns."""
+    df = df.copy()
+
+    # Region based on company_location
+    if "company_location" in df.columns:
+        df["region_company"] = df["company_location"].apply(infer_region)
+    else:
+        df["region_company"] = "Other"
+
+    # Seniority level from job_title
+    if "job_title" in df.columns:
+        df["seniority_level"] = df["job_title"].apply(infer_seniority)
+    else:
+        df["seniority_level"] = 2
+
+    # Ensure remote_ratio exists and is numeric
+    if "remote_ratio" in df.columns:
+        df["remote_ratio"] = pd.to_numeric(df["remote_ratio"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["remote_ratio"] = 0
+
+    return df
+
 
 # ---------------------------------------------------------
 # Load Dataset
@@ -58,6 +132,15 @@ st.markdown("**Target:** Salary | **Predictors:** Year, Job Title, Experience, C
 @st.cache_data
 def load_data():
     df = pd.read_csv("salaries_cyber_clean.csv")
+    # Keep only needed columns and engineer features
+    # Expected columns from your message:
+    # work_year, experience_level, employment_type, job_title,
+    # salary, salary_currency, salary_in_usd, employee_residence,
+    # remote_ratio, company_location, company_size
+    if "salary_in_usd" not in df.columns and "salary_usd" in df.columns:
+        df.rename(columns={"salary_usd": "salary_in_usd"}, inplace=True)
+
+    df = add_engineered_features(df)
     return df
 
 df = load_data()
@@ -67,72 +150,114 @@ df = load_data()
 # ---------------------------------------------------------
 st.sidebar.header("🎛️ Model Configuration")
 model_type = st.sidebar.selectbox(
-    "Select ML Algorithm",
+    "Select ML Model (for fallback / comparison)",
     ["Linear Regression", "Random Forest", "Gradient Boosting"],
-    help="Choose the prediction algorithm used when ML is involved"
+    help="This ML model is used as a fallback when growth-based cannot use profile history."
 )
 
-# Prediction method selector (A1: only affects Tab1 + Tab3)
+# (Still here for UI completeness, but growth logic is always based on rules below)
 prediction_method = st.sidebar.radio(
-    "Prediction Method",
+    "Prediction Method Label",
     ["Growth-Based (Recommended)", "Pure ML Model", "Hybrid"],
-    help=(
-        "• Growth-Based: Uses historical growth patterns first\n"
-        "• Pure ML Model: Uses the selected ML model only\n"
-        "• Hybrid: Simple blend of Growth + ML"
-    )
+    help="Growth-based core logic is preserved. ML is used mainly as fallback when no history exists."
 )
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 Dataset Info")
 st.sidebar.info(f"""
 - **Total Records:** {len(df):,}
-- **Actual Data Years:** 2020-2022
-- **Prediction Years:** 2023-2030
+- **Actual Data Years:** {', '.join(sorted(df['work_year'].astype(str).unique()))}
 - **Job Titles:** {df['job_title'].nunique()}
-- **Avg Salary (2020-2022):** ${df['salary_in_usd'].mean():,.0f}
+- **Avg Salary (2020-2022):** ${df[df['work_year'].between(2020, 2022)]['salary_in_usd'].mean():,.0f}
 """)
 
 st.sidebar.success(f"**Active ML Model:** {model_type}")
 
 # ---------------------------------------------------------
-# Train Models - Target: salary_in_usd, Predictors: All others
+# Train Models - Target: salary_in_usd
 # ---------------------------------------------------------
 @st.cache_resource
-def train_models(data):
-    # TARGET: salary_in_usd
-    # PREDICTORS: work_year, job_title, experience_level, company_size
-    X = data[["work_year", "job_title", "experience_level", "company_size"]]
-    y = data["salary_in_usd"]
+def train_models(data: pd.DataFrame):
+    """
+    Target: salary_in_usd
+    Predictors (richer feature set for better R²):
+    - work_year
+    - job_title
+    - experience_level
+    - company_size
+    - employment_type
+    - remote_ratio
+    - employee_residence
+    - company_location
+    - salary_currency
+    - region_company (engineered)
+    - seniority_level (engineered)
+    """
+    feature_cols = [
+        "work_year",
+        "job_title",
+        "experience_level",
+        "company_size",
+        "employment_type",
+        "remote_ratio",
+        "employee_residence",
+        "company_location",
+        "salary_currency",
+        "region_company",
+        "seniority_level",
+    ]
+    target_col = "salary_in_usd"
 
+    # Filter columns safely
+    available_features = [c for c in feature_cols if c in data.columns]
+    X = data[available_features].copy()
+    y = data[target_col].copy()
+
+    # Identify numeric vs categorical
+    numeric_cols = []
+    categorical_cols = []
+    for c in available_features:
+        if pd.api.types.is_numeric_dtype(X[c]):
+            numeric_cols.append(c)
+        else:
+            categorical_cols.append(c)
+
+    # Split train / test
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
 
-    # Categorical columns to encode
-    categorical_cols = ["job_title", "experience_level", "company_size"]
+    # Preprocessor
+    transformers = []
+    if categorical_cols:
+        transformers.append(
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
+        )
+    if numeric_cols:
+        transformers.append(
+            ("num", "passthrough", numeric_cols)
+        )
 
     preprocessor = ColumnTransformer(
-        transformers=[
-            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
-        ],
-        remainder="passthrough"  # Keep work_year as numeric
+        transformers=transformers,
+        remainder="drop"
     )
 
     models = {
         "Linear Regression": LinearRegression(),
         "Random Forest": RandomForestRegressor(
-            n_estimators=200,
+            n_estimators=400,
             random_state=42,
-            max_depth=15,
-            min_samples_split=5,
-            min_samples_leaf=2
+            max_depth=None,
+            min_samples_split=4,
+            min_samples_leaf=2,
+            n_jobs=-1
         ),
         "Gradient Boosting": GradientBoostingRegressor(
-            n_estimators=200,
+            n_estimators=300,
             random_state=42,
-            max_depth=7,
-            learning_rate=0.1
+            max_depth=5,
+            learning_rate=0.05
         )
     }
 
@@ -153,32 +278,104 @@ def train_models(data):
             pipeline, X_train, y_train, cv=5, scoring='r2'
         )
 
-        trained_models[name] = pipeline
+        trained_models[name] = (pipeline, available_features, numeric_cols, categorical_cols)
         metrics[name] = {
             "R² Score": r2_score(y_test, y_pred),
             "MAE": mean_absolute_error(y_test, y_pred),
             "RMSE": np.sqrt(mean_squared_error(y_test, y_pred)),
             "CV R² Mean": cv_scores.mean(),
-            "CV R² Std": cv_scores.std()
+            "CV R² Std": cv_scores.std(),
         }
 
     return trained_models, metrics, X_test, y_test
 
-models, performance_metrics, X_test, y_test = train_models(df)
-selected_model = models[model_type]
+
+trained_models, performance_metrics, X_test, y_test = train_models(df)
+selected_pipeline, feature_cols_used, numeric_cols_used, categorical_cols_used = trained_models[model_type]
+selected_model = selected_pipeline  # for compatibility later
 
 # ---------------------------------------------------------
-# Display Model Performance
+# Display Model Performance (Sidebar)
 # ---------------------------------------------------------
 with st.sidebar.expander("📈 ML Model Performance", expanded=True):
     perf = performance_metrics[model_type]
     st.metric("R² Score", f"{perf['R² Score']:.3f}")
     st.metric("MAE", f"${perf['MAE']:,.0f}")
     st.metric("RMSE", f"${perf['RMSE']:,.0f}")
-    st.caption(f"CV: {perf['CV R² Mean']:.3f}±{perf['CV R² Std']:.3f}")
+    st.caption(f"CV R²: {perf['CV R² Mean']:.3f} ± {perf['CV R² Std']:.3f}")
 
 # ---------------------------------------------------------
-# Helper: Average Growth from Similar Profiles
+# Helper: profile defaults for ML fallback
+# ---------------------------------------------------------
+@st.cache_data
+def get_profile_defaults(job, exp, size):
+    """
+    When we need to call the ML model but the user only chose:
+    - job_title, experience_level, company_size
+
+    We fill other features with most common values
+    from dataset for that (job, exp, size) profile.
+    """
+    subset = df[
+        (df["job_title"] == job) &
+        (df["experience_level"] == exp) &
+        (df["company_size"] == size)
+    ]
+
+    def mode_or_global(col):
+        if col not in df.columns:
+            return None
+        if len(subset) > 0 and subset[col].notna().any():
+            return subset[col].mode().iloc[0]
+        # Fallback to global mode
+        if df[col].notna().any():
+            return df[col].mode().iloc[0]
+        return None
+
+    defaults = {
+        "employment_type": mode_or_global("employment_type") or "FT",
+        "remote_ratio": mode_or_global("remote_ratio") or 0,
+        "employee_residence": mode_or_global("employee_residence") or "US",
+        "company_location": mode_or_global("company_location") or "US",
+        "salary_currency": mode_or_global("salary_currency") or "USD",
+    }
+
+    return defaults
+
+
+def build_ml_input(year, job, exp, size):
+    """
+    Build a single-row DataFrame containing ALL ML features
+    using user selections + inferred defaults.
+    """
+    defaults = get_profile_defaults(job, exp, size)
+
+    company_loc = defaults["company_location"]
+    region_company = infer_region(company_loc)
+    seniority_level = infer_seniority(job)
+
+    data = {
+        "work_year": [year],
+        "job_title": [job],
+        "experience_level": [exp],
+        "company_size": [size],
+        "employment_type": [defaults["employment_type"]],
+        "remote_ratio": [int(defaults["remote_ratio"])],
+        "employee_residence": [defaults["employee_residence"]],
+        "company_location": [company_loc],
+        "salary_currency": [defaults["salary_currency"]],
+        "region_company": [region_company],
+        "seniority_level": [seniority_level],
+    }
+
+    # Filter only features used by the pipeline
+    data = {k: v for k, v in data.items() if k in feature_cols_used}
+    pred_df = pd.DataFrame(data)
+    return pred_df
+
+
+# ---------------------------------------------------------
+# Helper: Average Growth from Similar Profiles (unchanged logic)
 # ---------------------------------------------------------
 @st.cache_data
 def get_mean_growth_from_similar(data, job, exp):
@@ -199,7 +396,6 @@ def get_mean_growth_from_similar(data, job, exp):
     growth_rates = []
 
     if len(similar) > 0:
-        # Iterate by company size combos
         for size in similar["company_size"].unique():
             prof = data[
                 (data["job_title"] == job) &
@@ -214,7 +410,6 @@ def get_mean_growth_from_similar(data, job, exp):
                 g = float(np.clip(g, -0.20, 0.20))
                 growth_rates.append(g)
 
-    # If we found multi-year profiles at this (job, exp) level
     if len(growth_rates) > 0:
         return float(np.mean(growth_rates)), len(growth_rates)
 
@@ -239,6 +434,7 @@ def get_mean_growth_from_similar(data, job, exp):
     # Final fallback: default 5%
     return 0.05, 0
 
+
 # ---------------------------------------------------------
 # Helper: Own Profile Growth (for ≥2 years)
 # ---------------------------------------------------------
@@ -255,7 +451,7 @@ def calculate_growth_rate(data, job, exp, size):
     ].groupby("work_year")["salary_in_usd"].mean().sort_index()
 
     if len(profile_data) < 2:
-        return None, None, None  # Not enough data
+        return None, None, None
 
     years = profile_data.index.values
     salaries = profile_data.values
@@ -271,15 +467,23 @@ def calculate_growth_rate(data, job, exp, size):
 
     return growth, years.tolist(), salaries.tolist()
 
+
 # ---------------------------------------------------------
-# PURE GROWTH-BASED ENGINE (unchanged logic)
+# Prediction Function with New ML Fallback (Growth unchanged)
 # ---------------------------------------------------------
-def get_salary_growth_only(year, job, exp, size):
+def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     """
-    This is your original growth-based engine.
-    It does NOT know about 'prediction_method'.
-    We keep it intact so Growth-Based mode is unaffected.
+    Rules (Growth Based preserved):
+    1) If profile (job+exp+size) has ≥ 2 years of actual data:
+       - Use own historical growth pattern for predictions.
+    2) If profile has exactly 1 year of actual data:
+       - Use average growth pattern from similar profiles.
+    3) If profile has 0 years of actual data:
+       - Rely on ML model (with inferred defaults).
+    For 2020-2022:
+       - If actual data exists for that year, always use actual.
     """
+
     profile_history = df[
         (df["job_title"] == job) &
         (df["experience_level"] == exp) &
@@ -289,24 +493,19 @@ def get_salary_growth_only(year, job, exp, size):
     years_available = sorted(profile_history["work_year"].unique())
     num_years = len(years_available)
 
-    # 1) For 2020-2022: if we have actual data for that exact year, return actual
+    # 1) Exact actual for 2020-2022
     if year <= 2022:
         actual_for_year = profile_history[profile_history["work_year"] == year]
         if len(actual_for_year) > 0:
             return actual_for_year["salary_in_usd"].mean(), "Actual"
 
-    # Case 0: No actual data at all for this profile
+    # --------- Case 0: No actual data for this profile ----------
     if num_years == 0:
-        pred_input = pd.DataFrame({
-            "work_year": [year],
-            "job_title": [job],
-            "experience_level": [exp],
-            "company_size": [size]
-        })
-        predicted_salary = selected_model.predict(pred_input)[0]
+        pred_input = build_ml_input(year, job, exp, size)
+        predicted_salary = selected_pipeline.predict(pred_input)[0]
         return max(0, predicted_salary), "Predicted (ML Only - No Profile History)"
 
-    # Case 1: Exactly 1 year of data
+    # --------- Case 1: Exactly 1 year ----------
     if num_years == 1:
         base_year = years_available[0]
         base_salary = profile_history["salary_in_usd"].mean()
@@ -326,101 +525,35 @@ def get_salary_growth_only(year, job, exp, size):
 
         return max(0, predicted_salary), src
 
-    # Case 2: 2 or more years of data → use own pattern
+    # --------- Case 2: 2+ years → own pattern ----------
     if num_years >= 2:
         growth_rate, yrs, sals = calculate_growth_rate(df, job, exp, size)
 
-        # If for some reason growth_rate couldn't be computed, fallback to ML
         if growth_rate is None:
-            pred_input = pd.DataFrame({
-                "work_year": [year],
-                "job_title": [job],
-                "experience_level": [exp],
-                "company_size": [size]
-            })
-            predicted_salary = selected_model.predict(pred_input)[0]
+            # Fallback to ML if growth can't be computed
+            pred_input = build_ml_input(year, job, exp, size)
+            predicted_salary = selected_pipeline.predict(pred_input)[0]
             return max(0, predicted_salary), "Predicted (ML Fallback)"
 
-        # Use the last actual year as base
-        last_year = yrs[-1]
-        last_salary = sals[-1]
-
-        # If we are within the historical range and have actual data → return actual
+        # If we have exact actual year
         if year in yrs:
             actual_for_year = profile_history[profile_history["work_year"] == year]
             if len(actual_for_year) > 0:
                 return actual_for_year["salary_in_usd"].mean(), "Actual"
 
-        # Future (or missing) year → extrapolate using own growth pattern
+        # Future (or missing) year → extrapolation
+        last_year = yrs[-1]
+        last_salary = sals[-1]
         years_ahead = year - last_year
         predicted_salary = last_salary * ((1 + growth_rate) ** years_ahead)
 
         return max(0, predicted_salary), "Predicted (Own Profile Pattern)"
 
-    # Safety fallback
-    pred_input = pd.DataFrame({
-        "work_year": [year],
-        "job_title": [job],
-        "experience_level": [exp],
-        "company_size": [size]
-    })
-    predicted_salary = selected_model.predict(pred_input)[0]
-    return max(0, predicted_salary), "Predicted (Fallback)"
+    # Safety fallback (should not reach here)
+    pred_input = build_ml_input(year, job, exp, size)
+    predicted_salary = selected_pipeline.predict(pred_input)[0]
+    return max(0, predicted_salary), "Predicted (Fallback ML)"
 
-# ---------------------------------------------------------
-# WRAPPER: ADD ML MODE & HYBRID (A1 behavior)
-# ---------------------------------------------------------
-def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
-    """
-    A1 behavior:
-    - Growth-Based: use growth engine only
-    - Pure ML Model: use ML model only (but still respect actual data 2020–2022)
-    - Hybrid: average of Growth + ML when possible
-    """
-
-    # Always compute growth-based once (for Hybrid / fallback)
-    growth_salary, growth_source = get_salary_growth_only(year, job, exp, size)
-
-    # Shortcut: Growth-Based mode → use original logic directly
-    if method == "Growth-Based (Recommended)":
-        return growth_salary, growth_source
-
-    # Helper: pure ML prediction
-    def ml_only_predict():
-        # If year <= 2022 and we actually have that year in dataset, still use real data
-        profile_history = df[
-            (df["job_title"] == job) &
-            (df["experience_level"] == exp) &
-            (df["company_size"] == size)
-        ]
-        if year <= 2022:
-            actual_for_year = profile_history[profile_history["work_year"] == year]
-            if len(actual_for_year) > 0:
-                return actual_for_year["salary_in_usd"].mean(), "Actual"
-
-        pred_input = pd.DataFrame({
-            "work_year": [year],
-            "job_title": [job],
-            "experience_level": [exp],
-            "company_size": [size]
-        })
-        predicted_salary = selected_model.predict(pred_input)[0]
-        return max(0, predicted_salary), f"Predicted (Pure ML - {model_type})"
-
-    # Pure ML Model mode
-    if method == "Pure ML Model":
-        return ml_only_predict()
-
-    # Hybrid mode: simple 50/50 blend between growth & ML
-    if method == "Hybrid":
-        ml_salary, ml_source = ml_only_predict()
-        blended = (growth_salary + ml_salary) / 2.0
-        blended = max(0, blended)
-        hybrid_source = f"Hybrid: 50% Growth ({growth_source}), 50% ML ({ml_source})"
-        return blended, hybrid_source
-
-    # Safety fallback: just return growth version
-    return growth_salary, growth_source
 
 # ---------------------------------------------------------
 # Main Content - Tabs
@@ -447,7 +580,7 @@ with tab1:
     with col3:
         custom_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
 
-    # Show growth / data availability info (based on growth engine only)
+    # Data availability info
     profile_history = df[
         (df["job_title"] == custom_job) &
         (df["experience_level"] == custom_exp) &
@@ -459,11 +592,11 @@ with tab1:
         st.warning(
             "⚠️ No actual historical data for this exact profile "
             f"({custom_job}, {custom_exp}, {custom_size}). "
-            "Growth-based mode will rely more on ML fallback."
+            "Predictions will rely more on the ML model and broader patterns."
         )
     elif unique_years == 1:
-        year_available = profile_history['work_year'].iloc[0]
-        salary_available = profile_history['salary_in_usd'].mean()
+        year_available = profile_history["work_year"].iloc[0]
+        salary_available = profile_history["salary_in_usd"].mean()
         avg_growth, num_profiles = get_mean_growth_from_similar(df, custom_job, custom_exp)
 
         if num_profiles > 0:
@@ -496,7 +629,7 @@ with tab1:
                     f"job/experience-level trend: "
                     f"**{avg_growth*100:.1f}% per year**."
                 )
-    else:  # unique_years >= 2
+    else:
         growth_rate, years_list, salaries_list = calculate_growth_rate(
             df, custom_job, custom_exp, custom_size
         )
@@ -524,7 +657,7 @@ with tab1:
 
     st.markdown("---")
 
-    # Generate forecast for 2020-2030 (A1: here we use the selected prediction_method)
+    # Forecast 2020-2030
     all_years = np.arange(2020, 2031)
     forecast_data = []
 
@@ -540,19 +673,16 @@ with tab1:
 
     forecast_df = pd.DataFrame(forecast_data)
 
-    # Detect any NaN or negative salaries
     if (forecast_df["Salary (USD)"] < 0).any():
         st.error(
             "⚠️ Error: Negative salaries detected! This profile may have "
             "insufficient or unstable data."
         )
 
-    # Split Actual vs Predicted based on Source string
     actual_mask = forecast_df["Source"].str.contains("Actual", na=False)
     actual_df = forecast_df[actual_mask]
     predicted_df = forecast_df[~actual_mask]
 
-    # Show data breakdown
     actual_years = sorted(actual_df["Year"].tolist())
     predicted_years = sorted(predicted_df["Year"].tolist())
 
@@ -576,10 +706,9 @@ with tab1:
         else:
             st.warning("⚠️ No predictions generated.")
 
-    # Calculate metrics safely
+    # Metrics: 2020, 2025, 2030
     safe_df = forecast_df.dropna(subset=["Salary (USD)"])
     if not safe_df.empty:
-        # 2020
         if 2020 in safe_df["Year"].values:
             start_salary = float(
                 safe_df[safe_df["Year"] == 2020]["Salary (USD)"].iloc[0]
@@ -587,7 +716,6 @@ with tab1:
         else:
             start_salary = float(safe_df.iloc[0]["Salary (USD)"])
 
-        # 2030
         if 2030 in safe_df["Year"].values:
             end_salary = float(
                 safe_df[safe_df["Year"] == 2030]["Salary (USD)"].iloc[0]
@@ -595,7 +723,6 @@ with tab1:
         else:
             end_salary = float(safe_df.iloc[-1]["Salary (USD)"])
 
-        # 2025
         if 2025 in safe_df["Year"].values:
             salary_2025 = float(
                 safe_df[safe_df["Year"] == 2025]["Salary (USD)"].iloc[0]
@@ -615,10 +742,9 @@ with tab1:
             else:
                 st.metric("📈 Total Growth (2020-2030)", "N/A")
 
-    # Enhanced Visualization
+    # Plot
     fig = go.Figure()
 
-    # Plot Actual Data (2020-2022)
     if len(actual_df) > 0:
         fig.add_trace(go.Scatter(
             x=actual_df["Year"],
@@ -632,7 +758,6 @@ with tab1:
             hovertemplate='<b>Year:</b> %{x}<br><b>Salary:</b> $%{y:,.0f}<br><b>Source:</b> Actual<extra></extra>'
         ))
 
-    # Plot Predicted Data (Everything else)
     if len(predicted_df) > 0:
         fig.add_trace(go.Scatter(
             x=predicted_df["Year"],
@@ -649,7 +774,6 @@ with tab1:
     else:
         st.warning("⚠️ No predicted data to display. Check if there's historical data for this profile.")
 
-    # Add vertical separator only if we have both actual and predicted
     if len(actual_df) > 0 and len(predicted_df) > 0:
         fig.add_vline(
             x=2022.5,
@@ -684,7 +808,6 @@ with tab1:
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Show detailed table
     with st.expander("📋 View Detailed Forecast Table"):
         display_df = forecast_df.copy()
         display_df['Salary (USD)'] = display_df['Salary (USD)'].apply(
@@ -698,18 +821,12 @@ with tab1:
         - **Predicted (Similar Profiles Pattern):** Only 1 year of data; using average growth from similar job+experience profiles
         - **Predicted (Job/Experience-Level Pattern):** Using broader job/experience salary trend
         - **Predicted (ML Only - No Profile History):** No direct history for this profile; ML model estimate
-        - **Predicted (Pure ML - ...):** Force-using ML model for this year/profile
-        - **Hybrid:** 50% Growth-based, 50% ML
+        - **Predicted (ML Fallback):** When growth-rate can't be trusted, ML assists.
         """)
         st.dataframe(
             display_df,
             use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "Salary (USD)": st.column_config.TextColumn("Salary"),
-                "Source": st.column_config.TextColumn("Data Source")
-            }
+            hide_index=True
         )
 
 # ---------------------------------------------------------
@@ -718,15 +835,17 @@ with tab1:
 with tab2:
     st.subheader("📊 Salary Distribution Analysis (Actual Data: 2020-2022)")
 
+    df_actual = df[df["work_year"].between(2020, 2022)]
+
     col1, col2 = st.columns(2)
 
     with col1:
-        exp_avg = df.groupby("experience_level")["salary_in_usd"].mean().sort_values(ascending=False).reset_index()
+        exp_avg = df_actual.groupby("experience_level")["salary_in_usd"].mean().sort_values(ascending=False).reset_index()
         fig_exp = px.bar(
             exp_avg,
             x="experience_level",
             y="salary_in_usd",
-            title="Average Salary by Experience Level",
+            title="Average Salary by Experience Level (2020-2022)",
             color="salary_in_usd",
             color_continuous_scale="Viridis",
             text="salary_in_usd"
@@ -740,12 +859,12 @@ with tab2:
         st.plotly_chart(fig_exp, use_container_width=True)
 
     with col2:
-        size_avg = df.groupby("company_size")["salary_in_usd"].mean().sort_values(ascending=False).reset_index()
+        size_avg = df_actual.groupby("company_size")["salary_in_usd"].mean().sort_values(ascending=False).reset_index()
         fig_size = px.bar(
             size_avg,
             x="company_size",
             y="salary_in_usd",
-            title="Average Salary by Company Size",
+            title="Average Salary by Company Size (2020-2022)",
             color="salary_in_usd",
             color_continuous_scale="Plasma",
             text="salary_in_usd"
@@ -758,7 +877,6 @@ with tab2:
         )
         st.plotly_chart(fig_size, use_container_width=True)
 
-    # Top Paying Jobs
     st.markdown("---")
     st.subheader("💎 Top 10 Highest Paying Jobs")
 
@@ -766,12 +884,10 @@ with tab2:
         "Select Year",
         [2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030],
         horizontal=True,
-        index=2  # Default 2022
+        index=2
     )
 
-    # Get top jobs for selected year
     if year_selector <= 2022:
-        # Use actual data
         top_jobs = df[df['work_year'] == year_selector].groupby(
             'job_title'
         )['salary_in_usd'].mean().sort_values(
@@ -779,28 +895,31 @@ with tab2:
         ).head(10).reset_index()
         data_type = "Actual Data"
     else:
-        # A1: for Data Analysis we always use Growth-Based method (stable)
         all_jobs = df['job_title'].unique()
         job_salaries = []
 
         for job in all_jobs:
             job_data = df[df['job_title'] == job]
+            if job_data.empty:
+                continue
             most_common_exp = job_data['experience_level'].mode()[0]
             most_common_size = job_data['company_size'].mode()[0]
 
             salary, _ = get_salary(
-                year_selector, job, most_common_exp, most_common_size,
-                method="Growth-Based (Recommended)"
+                year_selector, job, most_common_exp, most_common_size, prediction_method
             )
             job_salaries.append({
                 "job_title": job,
                 "salary_in_usd": salary
             })
 
-        top_jobs = pd.DataFrame(job_salaries).sort_values(
-            'salary_in_usd', ascending=False
-        ).head(10)
-        data_type = "Pattern/ML-Enhanced Growth"
+        if job_salaries:
+            top_jobs = pd.DataFrame(job_salaries).sort_values(
+                'salary_in_usd', ascending=False
+            ).head(10)
+        else:
+            top_jobs = pd.DataFrame(columns=["job_title", "salary_in_usd"])
+        data_type = "Pattern/ML Predictions"
 
     if len(top_jobs) > 0:
         fig_top = px.bar(
@@ -822,6 +941,8 @@ with tab2:
             yaxis_title=""
         )
         st.plotly_chart(fig_top, use_container_width=True)
+    else:
+        st.info("No data available to show top jobs for this year.")
 
 # ---------------------------------------------------------
 # TAB 3: Salary Calculator
@@ -831,24 +952,19 @@ with tab3:
 
     calc_year = st.slider("📅 Select Year", 2020, 2030, 2025)
 
-    # Use current profile + current prediction_method (A1: this is allowed)
     salary_value, data_source = get_salary(
         calc_year, custom_job, custom_exp, custom_size, prediction_method
     )
 
     st.markdown("---")
 
-    # Display data source
     if "Actual" in data_source:
         st.success(f"✅ Using {data_source} from dataset")
-    elif "Pure ML" in data_source or "ML Only" in data_source:
-        st.warning(f"⚠️ {data_source}")
-    elif "Hybrid" in data_source:
-        st.info(f"🌓 {data_source}")
+    elif "ML Only" in data_source:
+        st.warning(f"⚠️ {data_source} (no direct profile history)")
     else:
         st.info(f"🔮 {data_source}")
 
-    # Display salary
     col_x, col_y, col_z = st.columns([1, 2, 1])
 
     with col_y:
@@ -861,14 +977,11 @@ with tab3:
         </div>
         """, unsafe_allow_html=True)
 
-    # Market comparison
     st.markdown("---")
     st.subheader("📊 Market Comparison")
 
-    # Calculate market average for this job across all years
     market_avg_all = df[df["job_title"] == custom_job]["salary_in_usd"].mean()
 
-    # Calculate for specific year if actual data exists
     if calc_year <= 2022:
         market_year = df[
             (df["job_title"] == custom_job) &
@@ -906,32 +1019,32 @@ with tab4:
         <h4>📌 How This Works:</h4>
         <ul>
             <li><b>Target Variable:</b> salary_in_usd (what we predict)</li>
-            <li><b>Predictor Variables:</b> work_year, job_title, experience_level, company_size</li>
-            <li><b>Training Data:</b> Actual salaries from 2020-2022</li>
-            <li><b>Growth-Based Engine:</b> Uses:
+            <li><b>Predictor Variables (ML):</b> work_year, job_title, experience_level, company_size,
+                employment_type, remote_ratio, employee_residence, company_location,
+                salary_currency, region_company, seniority_level</li>
+            <li><b>Training Data:</b> Actual salaries from 2020-2022 (and other available years)</li>
+            <li><b>Predictions Logic:</b>
                 <ul>
-                    <li>Own profile pattern (if 2+ years of data)</li>
-                    <li>Similar profiles pattern (if 1 year of data)</li>
-                    <li>ML-only estimates (if no profile history)</li>
+                    <li>Own profile pattern (2+ years of history)</li>
+                    <li>Similar profiles pattern (1 year)</li>
+                    <li>ML fallback when no profile history exists</li>
                 </ul>
             </li>
-            <li><b>Pure ML / Hybrid Modes:</b> Use the selected ML model on top of the growth engine.</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # Model comparison
     st.markdown("### 📊 ML Model Comparison")
 
     comparison_data = []
-    for m_name, m_metrics in performance_metrics.items():
+    for model_name, metrics in performance_metrics.items():
         comparison_data.append({
-            "Model": m_name,
-            "R² Score": m_metrics["R² Score"],
-            "MAE ($)": m_metrics["MAE"],
-            "RMSE ($)": m_metrics["RMSE"]
+            "Model": model_name,
+            "R² Score": metrics["R² Score"],
+            "MAE ($)": metrics["MAE"],
+            "RMSE ($)": metrics["RMSE"],
         })
 
     comparison_df = pd.DataFrame(comparison_data)
@@ -964,56 +1077,51 @@ with tab4:
         fig_mae.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
         st.plotly_chart(fig_mae, use_container_width=True)
 
-    # Show detailed metrics table
     st.markdown("### 📈 Detailed Metrics")
     st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
-    # Feature importance (if Random Forest or Gradient Boosting)
+    # Feature importance for tree models
     if model_type in ["Random Forest", "Gradient Boosting"]:
         st.markdown("---")
-        st.markdown("### 🎯 Feature Importance")
+        st.markdown("### 🎯 Feature Importance (Top 15)")
 
-        model_estimator = selected_model.named_steps['model']
-        if hasattr(model_estimator, 'feature_importances_'):
-            preprocessor = selected_model.named_steps['prep']
-            ohe = preprocessor.named_transformers_['cat']
+        model_estimator = selected_pipeline.named_steps["model"]
+        preprocessor = selected_pipeline.named_steps["prep"]
 
-            importance_df = pd.DataFrame({
-                'Importance': model_estimator.feature_importances_
-            })
+        if hasattr(model_estimator, "feature_importances_"):
+            importances = model_estimator.feature_importances_
 
-            # Number of dummy features for each category
-            n_job = len(ohe.categories_[0])
-            n_exp = len(ohe.categories_[1])
-            n_size = len(ohe.categories_[2])
+            feature_names = []
+            if "cat" in preprocessor.named_transformers_:
+                ohe = preprocessor.named_transformers_["cat"]
+                cat_feature_names = list(ohe.get_feature_names_out(categorical_cols_used))
+                feature_names.extend(cat_feature_names)
 
-            feature_types = (
-                ['Job Title'] * n_job +
-                ['Experience'] * n_exp +
-                ['Company Size'] * n_size +
-                ['Year']  # work_year passthrough
-            )
-            importance_df['Feature Type'] = feature_types
+            if "num" in preprocessor.named_transformers_:
+                feature_names.extend(numeric_cols_used)
 
-            importance_grouped = importance_df.groupby(
-                'Feature Type'
-            )['Importance'].sum().sort_values(
-                ascending=False
-            ).reset_index()
+            # Safety if lengths mismatch
+            if len(feature_names) != len(importances):
+                feature_names = [f"Feature_{i}" for i in range(len(importances))]
+
+            imp_df = pd.DataFrame({
+                "Feature": feature_names,
+                "Importance": importances
+            }).sort_values("Importance", ascending=False).head(15)
 
             fig_imp = px.bar(
-                importance_grouped,
-                x='Importance',
-                y='Feature Type',
-                orientation='h',
-                title=f"Feature Importance - {model_type}",
-                color='Importance',
-                color_continuous_scale='Blues'
+                imp_df,
+                x="Importance",
+                y="Feature",
+                orientation="h",
+                title=f"Top 15 Important Features - {model_type}",
+                color="Importance",
+                color_continuous_scale="Blues"
             )
             fig_imp.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig_imp, use_container_width=True)
 
-            st.caption("💡 This shows which factor groups have the most impact on salary predictions")
+            st.caption("💡 Higher importance = more influence on the ML prediction.")
 
 # ---------------------------------------------------------
 # Footer
@@ -1021,14 +1129,8 @@ with tab4:
 st.markdown("---")
 st.markdown(f"""
     <div style='text-align: center; color: #666; padding: 2rem;'>
-        <p><b>Built with Streamlit • Growth Patterns + Machine Learning</b></p>
-        <p style='font-size: 0.9rem;'>
-            Active ML Model: {model_type} |
-            R² Score: {performance_metrics[model_type]["R² Score"]:.3f} |
-            MAE: ${performance_metrics[model_type]["MAE"]:,.0f}
-        </p>
-        <p style='font-size: 0.8rem;'>
-            Target: salary_in_usd | Predictors: work_year, job_title, experience_level, company_size
-        </p>
+        <p><b>Built with Streamlit • Growth-Based + ML Hybrid Logic</b></p>
+        <p style='font-size: 0.9rem;'>Active ML Model: {model_type} | R² Score: {performance_metrics[model_type]["R² Score"]:.3f} | MAE: ${performance_metrics[model_type]["MAE"]:,.0f}</p>
+        <p style='font-size: 0.8rem;'>Target: salary_in_usd | Predictors: work_year, job_title, experience_level, company_size + enriched features</p>
     </div>
 """, unsafe_allow_html=True)
