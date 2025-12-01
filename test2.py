@@ -272,109 +272,116 @@ def calculate_growth_rate(data, job, exp, size):
 # ---------------------------------------------------------
 def get_salary(year, job, exp, size, method="Growth-Based (Recommended)"):
     """
-    Unified salary prediction logic with 4 fallback rules:
-    1. If profile has >= 2 years actual data → use its own growth pattern
-    2. If profile has exactly 1 year actual data → use average growth of similar profiles
-    3. If profile has 0 years actual data → use Yearly Market Average for that year
-    4. If even the year has no data → use Overall Market Average
+    New rules:
+    1) If profile (job+exp+size) has ≥ 2 years of actual data:
+       - Use its own historical growth pattern for predictions.
+    2) If profile has exactly 1 year of actual data:
+       - Use average growth pattern from other similar profiles.
+    3) If profile has 0 years of actual data:
+       - Show warning in UI (Tab 1) and rely on ML model for estimates.
+    - For 2020-2022, if actual data exists for that year, always use actual.
     """
-
-    # ======================================================
-    # A) First: Try Actual Data (Only for 2020–2022)
-    # ======================================================
-    if 2020 <= year <= 2022:
-        exact = df[
-            (df["work_year"] == year) &
-            (df["job_title"] == job) &
-            (df["experience_level"] == exp) &
-            (df["company_size"] == size)
-        ]
-        if len(exact) > 0:
-            return float(exact["salary_in_usd"].mean()), "Actual"
-
-        partial = df[
-            (df["work_year"] == year) &
-            (df["job_title"] == job) &
-            (df["experience_level"] == exp)
-        ]
-        if len(partial) > 0:
-            return float(partial["salary_in_usd"].mean()), "Actual (Partial)"
-
-        job_only = df[
-            (df["work_year"] == year) &
-            (df["job_title"] == job)
-        ]
-        if len(job_only) > 0:
-            return float(job_only["salary_in_usd"].mean()), "Actual (Job Level)"
-
-        # If still nothing → fall through to predictions
-
-
-    # ======================================================
-    # B) Prediction Phase (for 2023–2030 or missing actual)
-    # ======================================================
-
+    # Full profile history
     profile_history = df[
         (df["job_title"] == job) &
         (df["experience_level"] == exp) &
         (df["company_size"] == size)
-    ].sort_values("work_year")
-
-    num_years = profile_history["work_year"].nunique()
-
+    ]
+    
+    years_available = sorted(profile_history["work_year"].unique())
+    num_years = len(years_available)
+    
+    # 1) For 2020-2022: if we have actual data for that exact year, return actual
+    if year <= 2022:
+        actual_for_year = profile_history[profile_history["work_year"] == year]
+        if len(actual_for_year) > 0:
+            return actual_for_year["salary_in_usd"].mean(), "Actual"
+    
+    # From here, we are either:
+    # - predicting 2023-2030, or
+    # - predicting 2020-2022 with no exact actual for this profile
+    
     # ------------------------------------------------------
-    # RULE 3 — Profile has 0 years of actual data
+    # Case 0: No actual data at all for this profile
     # ------------------------------------------------------
     if num_years == 0:
-
-        # 3a Yearly Market Average
-        year_avg = df[df["work_year"] == year]["salary_in_usd"].mean()
-
-        if not np.isnan(year_avg):
-            return float(year_avg), "Predicted (Yearly Market Avg)"
-
-        # 3b Use overall market average
-        overall_avg = df["salary_in_usd"].mean()
-        return float(overall_avg), "Predicted (Overall Market Avg)"
-
-
+        # No actual data for this exact profile.
+        # Use ML-only prediction but label clearly.
+        pred_input = pd.DataFrame({
+            "work_year": [year],
+            "job_title": [job],
+            "experience_level": [exp],
+            "company_size": [size]
+        })
+        predicted_salary = selected_model.predict(pred_input)[0]
+        return max(0, predicted_salary), "Predicted (ML Only - No Profile History)"
+    
     # ------------------------------------------------------
-    # RULE 2 — Profile has only 1 actual year
+    # Case 1: Exactly 1 year of data
     # ------------------------------------------------------
     if num_years == 1:
-        avg_growth, _ = get_mean_growth_from_similar(df, job, exp)
-
+        base_year = years_available[0]
         base_salary = profile_history["salary_in_usd"].mean()
-        base_year = profile_history["work_year"].iloc[0]
-
+        
+        # If we're asking about the actual year itself
+        if year == base_year:
+            return base_salary, "Actual (Single Year)"
+        
+        # Get average growth from similar profiles
+        avg_growth, num_profiles = get_mean_growth_from_similar(df, job, exp)
+        
         years_ahead = year - base_year
-        prediction = base_salary * ((1 + avg_growth) ** years_ahead)
-
-        return float(prediction), "Predicted (Similar Profile Pattern)"
-
-
+        predicted_salary = base_salary * ((1 + avg_growth) ** years_ahead)
+        
+        if num_profiles > 0:
+            src = f"Predicted (Similar Profiles Pattern, {num_profiles} profiles)"
+        else:
+            src = "Predicted (Job/Experience-Level Pattern)"
+        
+        return max(0, predicted_salary), src
+    
     # ------------------------------------------------------
-    # RULE 1 — Profile has 2 or more actual years
+    # Case 2: 2 or more years of data → use own pattern
     # ------------------------------------------------------
     if num_years >= 2:
-        growth_rate, growth_source = calculate_growth_rate(df, job, exp, size)
+        growth_rate, yrs, sals = calculate_growth_rate(df, job, exp, size)
+        
+        # If for some reason growth_rate couldn't be computed, fallback to ML
+        if growth_rate is None:
+            pred_input = pd.DataFrame({
+                "work_year": [year],
+                "job_title": [job],
+                "experience_level": [exp],
+                "company_size": [size]
+            })
+            predicted_salary = selected_model.predict(pred_input)[0]
+            return max(0, predicted_salary), "Predicted (ML Fallback)"
+        
+        # Use the last actual year as base
+        last_year = yrs[-1]
+        last_salary = sals[-1]
+        
+        # If we are within the historical range and have actual data → return actual
+        if year in yrs:
+            actual_for_year = profile_history[profile_history["work_year"] == year]
+            if len(actual_for_year) > 0:
+                return actual_for_year["salary_in_usd"].mean(), "Actual"
+        
+        # Future (or missing) year → extrapolate using own growth pattern
+        years_ahead = year - last_year
+        predicted_salary = last_salary * ((1 + growth_rate) ** years_ahead)
+        
+        return max(0, predicted_salary), "Predicted (Own Profile Pattern)"
 
-        last_row = profile_history.iloc[-1]
-        base_salary = last_row["salary_in_usd"]
-        base_year = last_row["work_year"]
-
-        years_ahead = year - base_year
-        prediction = base_salary * ((1 + growth_rate) ** years_ahead)
-
-        return float(prediction), f"Predicted (Own Pattern: {growth_source})"
-
-
-    # ------------------------------------------------------
-    # FINAL SAFETY NET (should never run)
-    # ------------------------------------------------------
-    fallback_salary = df["salary_in_usd"].mean()
-    return float(fallback_salary), "Predicted (Safe Fallback)"
-
+    # Safety fallback (should not reach here)
+    pred_input = pd.DataFrame({
+        "work_year": [year],
+        "job_title": [job],
+        "experience_level": [exp],
+        "company_size": [size]
+    })
+    predicted_salary = selected_model.predict(pred_input)[0]
+    return max(0, predicted_salary), "Predicted (Fallback)"
 
 # ---------------------------------------------------------
 # Main Content - Tabs
@@ -977,5 +984,3 @@ st.markdown(f"""
         <p style='font-size: 0.8rem;'>Target: salary_in_usd | Predictors: work_year, job_title, experience_level, company_size</p>
     </div>
 """, unsafe_allow_html=True)
-
-
