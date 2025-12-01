@@ -401,6 +401,7 @@ with tab1:
         tbl = forecast_df.copy()
         tbl["Salary"] = tbl["Salary"].apply(lambda x: f"${x:,.0f}")
         st.dataframe(tbl, use_container_width=True, hide_index=True)
+
 # ---------------------------------------------------------
 # TAB 2 — DATA ANALYSIS
 # ---------------------------------------------------------
