@@ -247,7 +247,6 @@ fig.add_trace(go.Scatter(
 
 fig.update_layout(
     height=500,
-    width="stretch",
     xaxis_title="Year",
     yaxis_title="Salary (USD)"
 )
@@ -289,5 +288,6 @@ if hasattr(model, "feature_importances_"):
 
 else:
     st.info("Feature importance is only available for Random Forest and Gradient Boosting.")
+
 
 
