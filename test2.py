@@ -39,7 +39,7 @@ feature_cols = [
 ]
 
 # Target
-target_col = "salary_usd"
+target_col = "salary_in_usd"
 
 X = df[feature_cols]
 y = df[target_col]
@@ -180,4 +180,5 @@ st.line_chart(chart_df, x="year", y="pred_salary", height=380)
 # Show raw data
 with st.expander("📄 Raw Prediction Data"):
     st.write(chart_df)
+
 
