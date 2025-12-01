@@ -3,16 +3,15 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.pipeline import Pipeline
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 
 # ---------------------------------------------------------
-# PAGE CONFIG
+# Page Config
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Salary Prediction Dashboard",
@@ -20,77 +19,79 @@ st.set_page_config(
     page_icon="💼"
 )
 
+# Custom CSS
 st.markdown("""
-<style>
-.main-header {
-    font-size: 3rem;
-    font-weight: bold;
-    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 0.5rem;
-}
-.metric-card {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 1.5rem;
-    border-radius: 10px;
-    color: white;
-    text-align: center;
-}
-.info-box {
-    background-color: #e3f2fd;
-    border-left: 4px solid #2196f3;
-    padding: 1rem;
-    border-radius: 5px;
-    margin: 1rem 0;
-}
-</style>
+    <style>
+    .main-header {
+        font-size: 3rem;
+        font-weight: bold;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+    }
+    .info-box {
+        background-color: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<h1 class="main-header">💼 Cybersecurity Salary Prediction Dashboard</h1>', unsafe_allow_html=True)
-st.markdown("*Actual Data: 2020-2022 | Predictions: 2023-2030*")
-st.markdown("**Target:** salary_in_usd | **Predictors:** job_title, experience_level, company_size, work_year")
+st.markdown("*Actual Data: 2020–2022 | Forecast Window: 2020–2030*")
+st.markdown("**Target:** salary_in_usd | **Features:** work_year, job_title, experience_level, company_size")
 
 # ---------------------------------------------------------
-# LOAD DATA
+# Load Dataset
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
-    return pd.read_csv("salaries_cyber_clean.csv")
+    df = pd.read_csv("salaries_cyber_clean.csv")
+    return df
 
 df = load_data()
 
 # ---------------------------------------------------------
-# SIDEBAR
+# Sidebar – Engine & Profile
 # ---------------------------------------------------------
-st.sidebar.header("🎛️ Model Selection")
+st.sidebar.header("🎛️ Prediction Settings")
 
-model_type = st.sidebar.selectbox(
-    "Machine Learning Model",
-    ["Linear Regression", "Random Forest", "Gradient Boosting"]
-)
-
-prediction_method = st.sidebar.radio(
-    "Prediction Mode",
-    ["Growth-Based", "Pure ML Model", "Hybrid"]
+engine = st.sidebar.radio(
+    "Prediction Engine",
+    ["Growth-Based Pattern", "Random Forest ML"],
+    help="• Growth-Based: uses historical salary patterns per profile.\n"
+         "• Random Forest ML: pure machine-learning model based on all data."
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""
-🔢 Records: {len(df):,}  
-📅 Years: 2020–2022 (actual), 2023–2030 (predicted)  
-👔 Job titles: {df['job_title'].nunique()}  
-""")
-
+st.sidebar.subheader("📊 Dataset Overview")
+st.sidebar.info(
+    f"- Records: **{len(df):,}**\n"
+    f"- Years in dataset: **{', '.join(map(str, sorted(df['work_year'].unique())))}**\n"
+    f"- Job titles: **{df['job_title'].nunique()}**\n"
+    f"- Avg salary (2020–2022): **${df['salary_in_usd'].mean():,.0f}**"
+)
 
 # ---------------------------------------------------------
-# TRAIN ML MODELS
+# Train Random-Forest Model (used for RF mode + fallbacks)
 # ---------------------------------------------------------
 @st.cache_resource
-def train_models(df):
+def train_rf_model(data: pd.DataFrame):
+    feature_cols = ["work_year", "job_title", "experience_level", "company_size"]
+    target_col = "salary_in_usd"
 
-    X = df[["work_year", "job_title", "experience_level", "company_size"]]
-    y = df["salary_in_usd"]
+    X = data[feature_cols]
+    y = data[target_col]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -102,534 +103,456 @@ def train_models(df):
         transformers=[
             ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)
         ],
-        remainder="passthrough"
+        remainder="passthrough"  # keep work_year numeric
     )
 
-    models = {
-        "Linear Regression": LinearRegression(),
-        "Random Forest": RandomForestRegressor(
-            n_estimators=250, max_depth=18, random_state=42
-        ),
-        "Gradient Boosting": GradientBoostingRegressor(
-            n_estimators=250, learning_rate=0.06, max_depth=6, random_state=42
-        )
-    }
+    rf = RandomForestRegressor(
+        n_estimators=300,
+        random_state=42,
+        max_depth=18,
+        min_samples_split=3,
+        min_samples_leaf=1,
+        n_jobs=-1,
+    )
 
-    trained = {}
-    metrics = {}
+    pipeline = Pipeline([
+        ("prep", preprocessor),
+        ("model", rf),
+    ])
 
-    for name, model in models.items():
+    pipeline.fit(X_train, y_train)
 
-        pipe = Pipeline([
-            ("prep", preprocessor),
-            ("model", model)
-        ])
+    y_pred = pipeline.predict(X_test)
 
-        pipe.fit(X_train, y_train)
-        pred = pipe.predict(X_test)
+    cv_scores = cross_val_score(
+        pipeline, X_train, y_train, cv=5, scoring="r2"
+    )
 
-        cv = cross_val_score(pipe, X_train, y_train, cv=5, scoring="r2")
+    metrics = dict(
+        r2=r2_score(y_test, y_pred),
+        mae=mean_absolute_error(y_test, y_pred),
+        rmse=np.sqrt(mean_squared_error(y_test, y_pred)),
+        cv_r2_mean=cv_scores.mean(),
+        cv_r2_std=cv_scores.std(),
+    )
 
-        trained[name] = pipe
-        metrics[name] = {
-            "R2": r2_score(y_test, pred),
-            "MAE": mean_absolute_error(y_test, pred),
-            "RMSE": np.sqrt(mean_squared_error(y_test, pred)),
-            "CV": cv.mean()
-        }
+    return pipeline, metrics
 
-    return trained, metrics
+rf_model, rf_metrics = train_rf_model(df)
 
-models, model_metrics = train_models(df)
-selected_model = models[model_type]
+with st.sidebar.expander("📈 Random Forest Performance", expanded=True):
+    st.metric("R²", f"{rf_metrics['r2']:.3f}")
+    st.metric("MAE", f"${rf_metrics['mae']:,.0f}")
+    st.metric("RMSE", f"${rf_metrics['rmse']:,.0f}")
+    st.caption(f"CV R²: {rf_metrics['cv_r2_mean']:.3f} ± {rf_metrics['cv_r2_std']:.3f}")
 
 # ---------------------------------------------------------
-# GROWTH CALCULATIONS (unchanged logic)
+# Growth-Pattern Helpers (UNCHANGED behaviour)
 # ---------------------------------------------------------
+@st.cache_data
+def get_mean_growth_from_similar(data, job, exp):
+    # same-job + experience first
+    similar = data[
+        (data["job_title"] == job) &
+        (data["experience_level"] == exp)
+    ]
+
+    growth_rates = []
+
+    if len(similar) > 0:
+        for size in similar["company_size"].unique():
+            prof = data[
+                (data["job_title"] == job) &
+                (data["experience_level"] == exp) &
+                (data["company_size"] == size)
+            ].groupby("work_year")["salary_in_usd"].mean().sort_index()
+
+            if len(prof) >= 2:
+                years = prof.index.values
+                salaries = prof.values
+                g = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+                g = float(np.clip(g, -0.20, 0.20))
+                growth_rates.append(g)
+
+    if len(growth_rates) > 0:
+        return float(np.mean(growth_rates)), len(growth_rates)
+
+    # Fallback: job-only
+    job_series = data[data["job_title"] == job].groupby("work_year")["salary_in_usd"].mean().sort_index()
+    if len(job_series) >= 2:
+        years = job_series.index.values
+        salaries = job_series.values
+        g = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+        g = float(np.clip(g, -0.15, 0.15))
+        return g, 0
+
+    # Fallback: experience-only
+    exp_series = data[data["experience_level"] == exp].groupby("work_year")["salary_in_usd"].mean().sort_index()
+    if len(exp_series) >= 2:
+        years = exp_series.index.values
+        salaries = exp_series.values
+        g = (salaries[-1] - salaries[0]) / salaries[0] / (years[-1] - years[0])
+        g = float(np.clip(g, -0.15, 0.15))
+        return g, 0
+
+    # Final fallback: 5%
+    return 0.05, 0
+
 
 @st.cache_data
-def calc_profile_growth(job, exp, size):
-
-    prof = df[
-        (df["job_title"] == job) &
-        (df["experience_level"] == exp) &
-        (df["company_size"] == size)
+def calculate_growth_rate(data, job, exp, size):
+    profile_data = data[
+        (data["job_title"] == job) &
+        (data["experience_level"] == exp) &
+        (data["company_size"] == size)
     ].groupby("work_year")["salary_in_usd"].mean().sort_index()
 
-    if len(prof) < 2:
+    if len(profile_data) < 2:
         return None, None, None
 
-    years = prof.index.values
-    vals = prof.values
+    years = profile_data.index.values
+    salaries = profile_data.values
 
-    growth = (vals[-1] - vals[0]) / vals[0] / (years[-1] - years[0])
-    return float(np.clip(growth, -0.20, 0.20)), years, vals
+    first_year, last_year = years[0], years[-1]
+    first_salary, last_salary = salaries[0], salaries[-1]
 
+    if first_salary <= 0:
+        return None, None, None
 
-@st.cache_data
-def similar_growth(job, exp):
+    growth = (last_salary - first_salary) / first_salary / (last_year - first_year)
+    growth = float(np.clip(growth, -0.20, 0.20))
 
-    similar = df[
-        (df["job_title"] == job) &
-        (df["experience_level"] == exp)
-    ]
-
-    profs = []
-    for size in similar["company_size"].unique():
-
-        grp = df[
-            (df["job_title"] == job) &
-            (df["experience_level"] == exp) &
-            (df["company_size"] == size)
-        ].groupby("work_year")["salary_in_usd"].mean().sort_index()
-
-        if len(grp) >= 2:
-            yrs = grp.index.values
-            sals = grp.values
-            g = (sals[-1]-sals[0]) / sals[0] / (yrs[-1]-yrs[0])
-            profs.append(g)
-
-    if len(profs) == 0:
-        return 0.05, 0
-
-    return float(np.mean(profs)), len(profs)
+    return growth, years.tolist(), salaries.tolist()
 
 
-# ---------------------------------------------------------
-# MASTER SALARY PREDICTION FUNCTION
-# ---------------------------------------------------------
-def get_salary(year, job, exp, size, method):
-
-    history = df[
+def get_salary_growth(year, job, exp, size):
+    """
+    ORIGINAL growth-based logic (2020–2022 use actual if available).
+    ML is ONLY used as fallback when there is 0 history for this profile.
+    """
+    profile_history = df[
         (df["job_title"] == job) &
         (df["experience_level"] == exp) &
         (df["company_size"] == size)
     ]
 
-    years_avail = sorted(history["work_year"].unique())
-    n = len(years_avail)
+    years_available = sorted(profile_history["work_year"].unique())
+    num_years = len(years_available)
 
-    # ---------------------------
-    # 1) Actual data
-    # ---------------------------
+    # 1) For 2020–2022: use actual if available
     if year <= 2022:
-        row = history[history["work_year"] == year]
-        if len(row) > 0:
-            return row["salary_in_usd"].mean(), "Actual"
+        actual_for_year = profile_history[profile_history["work_year"] == year]
+        if len(actual_for_year) > 0:
+            return actual_for_year["salary_in_usd"].mean(), "Actual"
 
-    # ---------------------------
-    # 2) ML input (for ML / Hybrid)
-    # ---------------------------
-    ml_input = pd.DataFrame({
+    # Case 0: no history → RF fallback
+    if num_years == 0:
+        X_pred = pd.DataFrame({
+            "work_year": [year],
+            "job_title": [job],
+            "experience_level": [exp],
+            "company_size": [size],
+        })
+        pred = rf_model.predict(X_pred)[0]
+        return max(0, pred), "Predicted (RF – No Profile History)"
+
+    # Case 1: exactly 1 year of data
+    if num_years == 1:
+        base_year = years_available[0]
+        base_salary = profile_history["salary_in_usd"].mean()
+
+        if year == base_year:
+            return base_salary, "Actual (Single Year)"
+
+        avg_growth, n_profiles = get_mean_growth_from_similar(df, job, exp)
+        years_ahead = year - base_year
+        pred = base_salary * ((1 + avg_growth) ** years_ahead)
+
+        if n_profiles > 0:
+            src = f"Predicted (Similar Profiles Pattern, {n_profiles} profiles)"
+        else:
+            src = "Predicted (Job/Experience-Level Pattern)"
+
+        return max(0, pred), src
+
+    # Case 2: ≥2 years → own profile pattern
+    if num_years >= 2:
+        growth_rate, yrs, sals = calculate_growth_rate(df, job, exp, size)
+        if growth_rate is None:
+            # fallback to RF
+            X_pred = pd.DataFrame({
+                "work_year": [year],
+                "job_title": [job],
+                "experience_level": [exp],
+                "company_size": [size],
+            })
+            pred = rf_model.predict(X_pred)[0]
+            return max(0, pred), "Predicted (RF Fallback)"
+
+        last_year = yrs[-1]
+        last_salary = sals[-1]
+
+        # if within historical range & we have actual
+        if year in yrs:
+            actual_for_year = profile_history[profile_history["work_year"] == year]
+            if len(actual_for_year) > 0:
+                return actual_for_year["salary_in_usd"].mean(), "Actual"
+
+        years_ahead = year - last_year
+        pred = last_salary * ((1 + growth_rate) ** years_ahead)
+
+        return max(0, pred), "Predicted (Own Profile Pattern)"
+
+    # safety fallback
+    X_pred = pd.DataFrame({
         "work_year": [year],
         "job_title": [job],
         "experience_level": [exp],
-        "company_size": [size]
+        "company_size": [size],
     })
-    ml_pred = selected_model.predict(ml_input)[0]
+    pred = rf_model.predict(X_pred)[0]
+    return max(0, pred), "Predicted (RF Fallback)"
 
-    # ---------------------------
-    # 3) Growth-Based Rules
-    # ---------------------------
-    if method != "Pure ML Model":
 
-        if n == 0:
-            g_salary = ml_pred
-            g_src = "ML Only (No History)"
+def get_salary_rf(year, job, exp, size):
+    """
+    PURE Random-Forest mode.
+    2020–2022 still show actual data when available, otherwise RF prediction.
+    No growth-pattern logic is used here.
+    """
+    profile_history = df[
+        (df["job_title"] == job) &
+        (df["experience_level"] == exp) &
+        (df["company_size"] == size)
+    ]
 
-        elif n == 1:
-            base_year = years_avail[0]
-            base_val = history["salary_in_usd"].mean()
-            g, c = similar_growth(job, exp)
-            yrs = year - base_year
-            g_salary = base_val * ((1 + g) ** yrs)
-            g_src = "Similar Profile Growth"
+    if year <= 2022:
+        actual_for_year = profile_history[profile_history["work_year"] == year]
+        if len(actual_for_year) > 0:
+            return actual_for_year["salary_in_usd"].mean(), "Actual"
 
+    X_pred = pd.DataFrame({
+        "work_year": [year],
+        "job_title": [job],
+        "experience_level": [exp],
+        "company_size": [size],
+    })
+    pred = rf_model.predict(X_pred)[0]
+    return max(0, pred), "Predicted (Random Forest)"
+
+# ---------------------------------------------------------
+# MAIN PAGE – single layout
+# ---------------------------------------------------------
+st.subheader("⚙️ Choose Your Profile")
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    sel_job = st.selectbox("👔 Job Title", sorted(df["job_title"].unique()))
+with c2:
+    sel_exp = st.selectbox("📈 Experience Level", sorted(df["experience_level"].unique()))
+with c3:
+    sel_size = st.selectbox("🏢 Company Size", sorted(df["company_size"].unique()))
+
+st.markdown("---")
+
+# Explain data availability & growth for this profile (always based on growth logic)
+profile_hist = df[
+    (df["job_title"] == sel_job) &
+    (df["experience_level"] == sel_exp) &
+    (df["company_size"] == sel_size)
+]
+uniq_years = profile_hist["work_year"].nunique()
+
+if uniq_years == 0:
+    st.warning(
+        "⚠️ This exact profile has **no historical records** in 2020–2022. "
+        "Growth-based mode will lean on RF fallback; Random-Forest mode is fully ML-driven."
+    )
+elif uniq_years == 1:
+    y0 = int(profile_hist["work_year"].iloc[0])
+    s0 = profile_hist["salary_in_usd"].mean()
+    g, nprof = get_mean_growth_from_similar(df, sel_job, sel_exp)
+    msg = (
+        f"ℹ️ This profile has **only 1 year** of data "
+        f"({y0}: ${s0:,.0f}). Estimated average growth from similar profiles: "
+        f"**{g*100:.1f}%/year**"
+    )
+    if g < 0:
+        st.warning("📉 " + msg)
+    else:
+        st.info(msg)
+else:
+    g, yrs, sals = calculate_growth_rate(df, sel_job, sel_exp, sel_size)
+    if g is not None:
+        seq = " → ".join(f"${v:,.0f}" for v in sals)
+        if g < 0:
+            st.warning(
+                f"📉 This profile has **{uniq_years} years** of data: {seq}. "
+                f"Average change: **{g*100:.1f}% per year (decline)**."
+            )
         else:
-            g, yrs, sals = calc_profile_growth(job, exp, size)
-            if g is None:
-                g_salary = ml_pred
-                g_src = "ML Fallback"
-            else:
-                base_year = yrs[-1]
-                base_val = sals[-1]
-                ahead = year - base_year
-                g_salary = base_val * ((1 + g) ** ahead)
-                g_src = "Own Growth Pattern"
-
+            st.success(
+                f"✅ This profile has **{uniq_years} years** of data: {seq}. "
+                f"Average growth: **{g*100:.1f}% per year**."
+            )
     else:
-        g_salary = ml_pred
-        g_src = "ML Only"
-
-    # ---------------------------
-    # 4) Hybrid
-    # ---------------------------
-    if method == "Hybrid":
-        final_salary = 0.7 * g_salary + 0.3 * ml_pred
-        final_src = "Hybrid (70% Growth + 30% ML)"
-    elif method == "Pure ML Model":
-        final_salary = ml_pred
-        final_src = "Pure ML"
-    else:
-        final_salary = g_salary
-        final_src = g_src
-
-    return max(0, float(final_salary)), final_src
-
-# ---------------------------------------------------------
-# TABS
-# ---------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🔮 Salary Forecast",
-    "📊 Data Analysis",
-    "💰 Salary Calculator",
-    "🗺️ Model Insights"
-])
-
-# ---------------------------------------------------------
-# TAB 1 — FORECAST
-# ---------------------------------------------------------
-with tab1:
-    st.subheader("⚙️ Customize Your Profile")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        t_job = st.selectbox("Job Title", sorted(df["job_title"].unique()))
-    with c2:
-        t_exp = st.selectbox("Experience Level", sorted(df["experience_level"].unique()))
-    with c3:
-        t_size = st.selectbox("Company Size", sorted(df["company_size"].unique()))
-
-    # -----------------------------------------------------
-    # FORECAST CALCULATION (2020–2030)
-    # -----------------------------------------------------
-    years = np.arange(2020, 2031)
-    forecast_rows = []
-
-    for yr in years:
-        sal, src = get_salary(
-            yr,
-            t_job,
-            t_exp,
-            t_size,
-            prediction_method
+        st.info(
+            "ℹ️ Multiple years of data exist, but a stable growth rate "
+            "could not be estimated. RF fallback will support predictions."
         )
-        forecast_rows.append({
-            "Year": yr,
-            "Salary": sal,
-            "Source": src
-        })
 
-    forecast_df = pd.DataFrame(forecast_rows)
+st.markdown("---")
 
-    # -----------------------------------------------------
-    # SPLIT ACTUAL / PREDICTED
-    # -----------------------------------------------------
-    actual_df = forecast_df[forecast_df["Source"].str.contains("Actual")]
-    pred_df = forecast_df[~forecast_df["Source"].str.contains("Actual")]
+# Year slider for detailed view
+year_selected = st.slider("📅 Focus Year", 2020, 2030, 2025)
 
-    # -----------------------------------------------------
-    # SUMMARY METRICS
-    # -----------------------------------------------------
-    st.markdown("---")
+# Build full 2020–2030 forecast according to selected engine
+years = np.arange(2020, 2031)
+rows = []
 
-    cA, cB, cC = st.columns(3)
+for y in years:
+    if engine == "Growth-Based Pattern":
+        sal, src = get_salary_growth(y, sel_job, sel_exp, sel_size)
+    else:  # Random Forest ML
+        sal, src = get_salary_rf(y, sel_job, sel_exp, sel_size)
 
-    start_salary = forecast_df.loc[forecast_df["Year"] == 2020, "Salary"].values[0]
-    end_salary = forecast_df.loc[forecast_df["Year"] == 2030, "Salary"].values[0]
+    rows.append(dict(Year=int(y), Salary=float(sal), Source=src))
 
-    with cA:
-        st.metric("Salary in 2020", f"${start_salary:,.0f}")
+forecast_df = pd.DataFrame(rows)
 
-    with cB:
-        mid_year = 2025
-        mid_salary = forecast_df.loc[forecast_df["Year"] == mid_year, "Salary"].values[0]
-        st.metric(f"Salary in {mid_year}", f"${mid_salary:,.0f}")
+# Split actual vs predicted (based on Source text)
+actual_mask = forecast_df["Source"].str.contains("Actual", na=False)
+actual_df = forecast_df[actual_mask]
+pred_df = forecast_df[~actual_mask]
 
-    with cC:
-        if start_salary > 0:
-            total_growth = ((end_salary - start_salary) / start_salary) * 100
-            st.metric("Total Growth (2020→2030)", f"{total_growth:.1f}%")
+# Summary metrics 2020 vs 2030 (if valid)
+safe = forecast_df.dropna(subset=["Salary"])
+if not safe.empty:
+    if 2020 in safe["Year"].values:
+        s0 = float(safe.loc[safe["Year"] == 2020, "Salary"].iloc[0])
+    else:
+        s0 = float(safe.iloc[0]["Salary"])
+
+    if 2030 in safe["Year"].values:
+        s1 = float(safe.loc[safe["Year"] == 2030, "Salary"].iloc[0])
+    else:
+        s1 = float(safe.iloc[-1]["Salary"])
+
+    if year_selected in safe["Year"].values:
+        sy = float(safe.loc[safe["Year"] == year_selected, "Salary"].iloc[0])
+    else:
+        sy = s1
+
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
+        st.metric("📅 2020 Salary", f"${s0:,.0f}")
+    with mc2:
+        st.metric(f"📅 {year_selected} Salary", f"${sy:,.0f}")
+    with mc3:
+        if s0 > 0:
+            gtot = (s1 - s0) / s0 * 100
+            st.metric("📈 Total Change (2020–2030)", f"{gtot:.1f}%")
         else:
-            st.metric("Total Growth", "N/A")
+            st.metric("📈 Total Change (2020–2030)", "N/A")
 
-    # -----------------------------------------------------
-    # LINE CHART (2020–2030)
-    # -----------------------------------------------------
-    fig = go.Figure()
+st.markdown("---")
 
-    # Actual
-    if len(actual_df) > 0:
-        fig.add_trace(go.Scatter(
-            x=actual_df["Year"],
-            y=actual_df["Salary"],
-            mode="lines+markers",
-            name="Actual (2020–2022)",
-            line=dict(width=4, color="#10b981"),
-            marker=dict(size=10, color="#10b981"),
-            hovertemplate="Year %{x}<br>Salary $%{y:,.0f}<extra></extra>"
-        ))
+# Single line chart
+fig = go.Figure()
 
-    # Predicted
+if len(actual_df) > 0:
+    fig.add_trace(go.Scatter(
+        x=actual_df["Year"],
+        y=actual_df["Salary"],
+        mode="lines+markers",
+        name="Actual (2020–2022)",
+        line=dict(color="#10b981", width=4),
+        marker=dict(size=10),
+        hovertemplate="Year %{x}<br>Salary $%{y:,.0f}<extra></extra>",
+    ))
+
+if len(pred_df) > 0:
     fig.add_trace(go.Scatter(
         x=pred_df["Year"],
         y=pred_df["Salary"],
         mode="lines+markers",
-        name="Predicted (2023–2030)",
-        line=dict(width=4, color="#667eea", dash="dot"),
-        marker=dict(size=10, color="#764ba2"),
-        hovertemplate="Year %{x}<br>$%{y:,.0f}<br>%{text}<extra></extra>",
-        text=pred_df["Source"]
+        name=f"{engine}",
+        line=dict(color="#667eea", width=4, dash="dash"),
+        marker=dict(size=10),
+        hovertemplate="Year %{x}<br>Salary $%{y:,.0f}<br>%{text}<extra></extra>",
+        text=pred_df["Source"],
     ))
 
-    fig.update_layout(
-        title=f"Salary Forecast — {t_job} ({t_exp}, {t_size})",
-        xaxis_title="Year",
-        yaxis_title="Salary (USD)",
-        height=480,
-        template="plotly_white",
-        xaxis=dict(dtick=1),
-        hovermode="x unified"
+if len(actual_df) > 0 and len(pred_df) > 0:
+    fig.add_vline(
+        x=2022.5,
+        line_dash="dot",
+        line_color="red",
+        line_width=2,
+        annotation_text="Actual → Forecast",
+        annotation_position="top",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
-
-    # -----------------------------------------------------
-    # FORECAST TABLE
-    # -----------------------------------------------------
-    with st.expander("📄 Detailed Forecast Table"):
-        tbl = forecast_df.copy()
-        tbl["Salary"] = tbl["Salary"].apply(lambda x: f"${x:,.0f}")
-        st.dataframe(tbl, use_container_width=True, hide_index=True)
-
-# ---------------------------------------------------------
-# TAB 2 — DATA ANALYSIS
-# ---------------------------------------------------------
-with tab2:
-    st.subheader("📊 Salary Distribution (Actual Data 2020–2022)")
-
-    # ------------------------ Experience ------------------------
-    colA, colB = st.columns(2)
-
-    with colA:
-        exp_stats = df.groupby("experience_level")["salary_in_usd"].mean().reset_index()
-        fig_exp = px.bar(
-            exp_stats,
-            x="experience_level",
-            y="salary_in_usd",
-            title="Average Salary by Experience Level",
-            color="salary_in_usd",
-            color_continuous_scale="Purples",
-            text="salary_in_usd"
-        )
-        fig_exp.update_traces(texttemplate="$%{text:,.0f}", textposition="outside")
-        fig_exp.update_layout(showlegend=False)
-        st.plotly_chart(fig_exp, use_container_width=True)
-
-    with colB:
-        size_stats = df.groupby("company_size")["salary_in_usd"].mean().reset_index()
-        fig_size = px.bar(
-            size_stats,
-            x="company_size",
-            y="salary_in_usd",
-            title="Average Salary by Company Size",
-            color="salary_in_usd",
-            color_continuous_scale="Blues",
-            text="salary_in_usd"
-        )
-        fig_size.update_traces(texttemplate="$%{text:,.0f}", textposition="outside")
-        fig_size.update_layout(showlegend=False)
-        st.plotly_chart(fig_size, use_container_width=True)
-
-    # ------------------------ Top Jobs ------------------------
-    st.markdown("---")
-    st.subheader("💎 Top 10 Highest-Paying Jobs")
-
-    selected_year = st.slider("Select Year", 2020, 2030, 2022)
-
-    if selected_year <= 2022:
-        top_df = (
-            df[df["work_year"] == selected_year]
-            .groupby("job_title")["salary_in_usd"]
-            .mean()
-            .sort_values(ascending=False)
-            .head(10)
-            .reset_index()
-        )
-        mode_text = "Actual Data"
-    else:
-        all_jobs = df["job_title"].unique()
-        results = []
-        for j in all_jobs:
-            j_df = df[df["job_title"] == j]
-            most_exp = j_df["experience_level"].mode()[0]
-            most_size = j_df["company_size"].mode()[0]
-
-            s, _ = get_salary(selected_year, j, most_exp, most_size, prediction_method)
-            results.append({"job_title": j, "salary_in_usd": s})
-
-        top_df = pd.DataFrame(results).sort_values("salary_in_usd", ascending=False).head(10)
-        mode_text = "Predicted (Growth/ML)"
-
-    fig_top = px.bar(
-        top_df,
-        x="salary_in_usd",
-        y="job_title",
+fig.update_layout(
+    title=dict(
+        text=f"Salary Trajectory (2020–2030)<br><sup>{sel_job} | {sel_exp} | {sel_size}</sup>",
+        font=dict(size=20),
+    ),
+    xaxis_title="Year",
+    yaxis_title="Salary (USD)",
+    template="plotly_white",
+    hovermode="x unified",
+    height=520,
+    xaxis=dict(dtick=1),
+    legend=dict(
         orientation="h",
-        title=f"Top 10 Highest-Paying Jobs — {selected_year} ({mode_text})",
-        color="salary_in_usd",
-        color_continuous_scale="Turbo",
-        text="salary_in_usd"
-    )
-    fig_top.update_traces(texttemplate="$%{text:,.0f}", textposition="outside")
-    fig_top.update_layout(
-        showlegend=False,
-        yaxis={"categoryorder": "total ascending"},
-        height=500
-    )
-    st.plotly_chart(fig_top, use_container_width=True)
+        yanchor="bottom",
+        y=1.02,
+        xanchor="right",
+        x=1,
+    ),
+)
 
+st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------
-# TAB 3 — SALARY CALCULATOR
-# ---------------------------------------------------------
-with tab3:
-    st.subheader("💰 Salary Calculator")
+# Focus-year card
+focus_salary = float(forecast_df.loc[forecast_df["Year"] == year_selected, "Salary"].iloc[0])
+focus_source = forecast_df.loc[forecast_df["Year"] == year_selected, "Source"].iloc[0]
 
-    calc_year = st.slider("Select Year", 2020, 2030, 2025)
-
-    s_val, s_src = get_salary(calc_year, t_job, t_exp, t_size, prediction_method)
-
-    st.markdown("---")
-
-    # Explanation
-    if "Actual" in s_src:
-        st.success(f"Using: {s_src}")
-    elif "ML Only" in s_src:
-        st.warning(f"Prediction Source: {s_src}")
-    else:
-        st.info(f"Prediction Source: {s_src}")
-
-    # Display card
+st.markdown("---")
+fx1, fx2, fx3 = st.columns([1, 2, 1])
+with fx2:
     st.markdown(f"""
     <div class="metric-card">
-        <h2>Salary in {calc_year}</h2>
-        <h1 style="font-size: 3rem; margin: 1rem 0;">${s_val:,.0f}</h1>
-        <p>{t_job} — {t_exp} — {t_size}</p>
+        <h3>Forecast for {year_selected}</h3>
+        <h1 style="font-size: 3.5rem; margin: 1rem 0;">${focus_salary:,.0f}</h1>
+        <p style="font-size: 1.1rem;">{sel_job}</p>
+        <p>{sel_exp} | {sel_size}</p>
+        <p style="font-size: 0.9rem; opacity: 0.9;">Source: {focus_source}</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # Market comparison
-    st.markdown("---")
-    st.subheader("📊 Market Comparison")
-
-    job_mean_all = df[df["job_title"] == t_job]["salary_in_usd"].mean()
-
-    if calc_year <= 2022:
-        year_mean = df[(df["job_title"] == t_job) & (df["work_year"] == calc_year)]["salary_in_usd"].mean()
-        if pd.notnull(year_mean):
-            market_val = year_mean
-            label = f"Market Avg ({calc_year})"
-        else:
-            market_val = job_mean_all
-            label = "Overall Market Avg"
-    else:
-        market_val = job_mean_all
-        label = "Historical Market Avg (2020–2022)"
-
-    diff = s_val - market_val
-    diff_pct = (diff / market_val * 100) if market_val > 0 else 0
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Your Salary", f"${s_val:,.0f}")
-    with c2:
-        st.metric(label, f"${market_val:,.0f}")
-    with c3:
-        st.metric("Difference", f"${diff:,.0f}", f"{diff_pct:+.1f}%")
-
-
-# ---------------------------------------------------------
-# TAB 4 — MODEL INSIGHTS
-# ---------------------------------------------------------
-with tab4:
-    st.subheader("🗺️ Model Insights")
-
-    st.markdown("""
-    <div class="info-box">
-        <b>Target:</b> salary_in_usd <br>
-        <b>Predictors:</b> work_year, job_title, experience_level, company_size <br>
-        <b>Training Data:</b> Actual salaries from 2020–2022 <br>
-        <b>Forecast:</b> 2023–2030 (Growth / ML / Hybrid)
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # Model performance table
-    comp = []
-    for mname, m in model_perf.items():
-        comp.append({
-            "Model": mname,
-            "R²": m["r2"],
-            "MAE": m["mae"],
-            "RMSE": m["rmse"]
-        })
-    comp_df = pd.DataFrame(comp)
-
-    st.dataframe(comp_df, use_container_width=True, hide_index=True)
-
-    # Feature importance (RF & GB)
-    if model_type in ["Random Forest", "Gradient Boosting"]:
-        st.subheader("🎯 Feature Importance")
-
-        est = selected_model.named_steps["model"]
-
-        if hasattr(est, "feature_importances_"):
-            pre = selected_model.named_steps["prep"]
-            ohe = pre.named_transformers_["cat"]
-
-            n_job = len(ohe.categories_[0])
-            n_exp = len(ohe.categories_[1])
-            n_size = len(ohe.categories_[2])
-
-            imp_list = (
-                ["Job Title"] * n_job +
-                ["Experience"] * n_exp +
-                ["Company Size"] * n_size +
-                ["Year"]
-            )
-
-            imp_df = pd.DataFrame({
-                "Feature": imp_list,
-                "Importance": est.feature_importances_
-            })
-
-            grp = (
-                imp_df.groupby("Feature")["Importance"]
-                .sum()
-                .sort_values(ascending=False)
-                .reset_index()
-            )
-
-            fig_imp = px.bar(
-                grp,
-                x="Importance",
-                y="Feature",
-                orientation="h",
-                color="Importance",
-                color_continuous_scale="Blues"
-            )
-            st.plotly_chart(fig_imp, use_container_width=True)
-
-
-# ---------------------------------------------------------
-# FOOTER
-# ---------------------------------------------------------
+# Simple comparison: this profile vs overall job-title average
 st.markdown("---")
-st.markdown(f"""
-<div style="text-align: center; padding: 1rem; color: #666;">
-    <p><b>Cybersecurity Salary Dashboard</b></p>
-    <p>Model: {model_type} • R² = {model_perf[model_type]['r2']:.3f}</p>
-</div>
-""", unsafe_allow_html=True)
+st.subheader("📊 Market Context (Historical 2020–2022)")
+
+job_hist_avg = df[df["job_title"] == sel_job]["salary_in_usd"].mean()
+diff = focus_salary - job_hist_avg
+pct = (diff / job_hist_avg) * 100 if job_hist_avg > 0 else 0.0
+
+cma, cmb, cmc = st.columns(3)
+with cma:
+    st.metric("This Profile (Selected Year)", f"${focus_salary:,.0f}")
+with cmb:
+    st.metric("Job-Title Historical Avg", f"${job_hist_avg:,.0f}")
+with cmc:
+    st.metric("Difference", f"${diff:,.0f}", f"{pct:+.1f}%")
+
+st.markdown("---")
+st.markdown(
+    f"<div style='text-align:center; color:#666; padding:1.5rem 0;'>"
+    f"Engine: <b>{engine}</b> · RF R²: {rf_metrics['r2']:.3f} · "
+    f"Target: salary_in_usd · Features: work_year, job_title, experience_level, company_size"
+    f"</div>",
+    unsafe_allow_html=True,
+)
