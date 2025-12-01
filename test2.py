@@ -364,32 +364,37 @@ with tab2:
 with tab3:
     st.subheader("🛠 Feature Importance")
 
-    model_obj = models[model_type].named_steps["model"]
-    prep_obj = models[model_type].named_steps["prep"]
+    # Retrieve the true pipeline (not the wrong dictionary)
+    pipeline = trained_models[model_type]
 
-    if hasattr(model_obj, "feature_importances_"):
+    # Safely detect steps
+    if "prep" in pipeline.named_steps:
+        prep_obj = pipeline.named_steps["prep"]
+        model_obj = pipeline.named_steps["model"]
+    else:
+        st.warning("⚠️ No preprocessing step found in this model pipeline. Feature importance unavailable.")
+        prep_obj = None
+        model_obj = None
 
-        # Get encoded categories from OneHotEncoder
+    if model_obj is not None and hasattr(model_obj, "feature_importances_"):
+
         ohe = prep_obj.named_transformers_["cat"]
         encoded_features = (
             list(ohe.get_feature_names_out(["job_title", "experience_level", "company_size"])) +
             ["work_year"]
         )
 
-        importances = model_obj.feature_importances_
-
         fi_df = pd.DataFrame({
             "Feature": encoded_features,
-            "Importance": importances
-        }).sort_values("Importance", ascending=False)
+            "Importance": model_obj.feature_importances_
+        }).sort_values(by="Importance", ascending=False)
 
-        st.dataframe(fi_df, hide_index=True, use_container_width=True)
+        st.dataframe(fi_df)
 
-        # Summarize by Category
         fi_df["Category"] = fi_df["Feature"].apply(
             lambda x: (
                 "Job Title" if x.startswith("job_title") else
-                "Experience Level" if x.startswith("experience_level") else
+                "Experience" if x.startswith("experience_level") else
                 "Company Size" if x.startswith("company_size") else
                 "Year"
             )
@@ -403,13 +408,12 @@ with tab3:
             y="Category",
             orientation="h",
             title="Feature Importance by Category",
-            color="Category",
-            color_discrete_sequence=px.colors.qualitative.Set2
+            color="Category"
         )
-        st.plotly_chart(fig_imp, use_container_width=True)
+        st.plotly_chart(fig_imp, width="stretch")
 
     else:
-        st.info("ℹ️ Feature importance is only available for Random Forest and Gradient Boosting.")
+        st.info("ℹ️ Feature importance is only supported for Random Forest & Gradient Boosting (and when pipeline is intact).")
 
 
 # =========================================================
@@ -439,3 +443,4 @@ st.markdown("""
     <p>Powered by Streamlit · Machine Learning · Salary Intelligence Engine</p>
 </div>
 """, unsafe_allow_html=True)
+
